@@ -1426,20 +1426,18 @@ function early_inline_special_case(
     params::OptimizationParams)
     (; f, ft, argtypes) = sig
 
-    if params.inlining
-        if isa(type, Const) # || isconstType(type)
-            val = type.val
-            is_inlineable_constant(val) || return nothing
-            if isa(f, IntrinsicFunction)
-                if is_pure_intrinsic_infer(f) && intrinsic_nothrow(f, argtypes[2:end])
-                    return SomeCase(quoted(val))
-                end
-            elseif ispuretopfunction(f) || contains_is(_PURE_BUILTINS, f)
+    if isa(type, Const) # || isconstType(type)
+        val = type.val
+        is_inlineable_constant(val) || return nothing
+        if isa(f, IntrinsicFunction)
+            if is_pure_intrinsic_infer(f) && intrinsic_nothrow(f, argtypes[2:end])
                 return SomeCase(quoted(val))
-            elseif contains_is(_PURE_OR_ERROR_BUILTINS, f)
-                if _builtin_nothrow(f, argtypes[2:end], type)
-                    return SomeCase(quoted(val))
-                end
+            end
+        elseif ispuretopfunction(f) || contains_is(_PURE_BUILTINS, f)
+            return SomeCase(quoted(val))
+        elseif contains_is(_PURE_OR_ERROR_BUILTINS, f)
+            if _builtin_nothrow(f, argtypes[2:end], type)
+                return SomeCase(quoted(val))
             end
         end
     end
@@ -1455,21 +1453,25 @@ function late_inline_special_case!(
     params::OptimizationParams)
     (; f, ft, argtypes) = sig
     isinlining = params.inlining
-    if isinlining && length(argtypes) == 3 && istopfunction(f, :!==)
+    if length(argtypes) == 3 && istopfunction(f, :!==)
         # special-case inliner for !== that precedes _methods_by_ftype union splitting
         # and that works, even though inference generally avoids inferring the `!==` Method
         if isa(type, Const)
             return SomeCase(quoted(type.val))
+        elseif !isinlining
+            return nothing
         end
         cmp_call = Expr(:call, GlobalRef(Core, :(===)), stmt.args[2], stmt.args[3])
         cmp_call_ssa = insert_node!(ir, idx, effect_free(NewInstruction(cmp_call, Bool)))
         not_call = Expr(:call, GlobalRef(Core.Intrinsics, :not_int), cmp_call_ssa)
         return SomeCase(not_call)
-    elseif isinlining && length(argtypes) == 3 && istopfunction(f, :(>:))
+    elseif length(argtypes) == 3 && istopfunction(f, :(>:))
         # special-case inliner for issupertype
         # that works, even though inference generally avoids inferring the `>:` Method
         if isa(type, Const) && _builtin_nothrow(<:, Any[argtypes[3], argtypes[2]], type)
             return SomeCase(quoted(type.val))
+        elseif !isinlining
+            return nothing
         end
         subtype_call = Expr(:call, GlobalRef(Core, :(<:)), stmt.args[3], stmt.args[2])
         return SomeCase(subtype_call)
