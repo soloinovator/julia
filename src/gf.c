@@ -205,7 +205,7 @@ JL_DLLEXPORT jl_code_instance_t* jl_new_codeinst(
         jl_method_instance_t *mi, jl_value_t *rettype,
         jl_value_t *inferred_const, jl_value_t *inferred,
         int32_t const_flags, size_t min_world, size_t max_world,
-        uint8_t ipo_effects, uint8_t effects);
+        uint32_t ipo_effects, uint32_t effects);
 JL_DLLEXPORT void jl_mi_cache_insert(jl_method_instance_t *mi JL_ROOTING_ARGUMENT,
                                      jl_code_instance_t *ci JL_ROOTED_ARGUMENT JL_MAYBE_UNROOTED);
 
@@ -367,7 +367,7 @@ JL_DLLEXPORT jl_code_instance_t *jl_new_codeinst(
         jl_method_instance_t *mi, jl_value_t *rettype,
         jl_value_t *inferred_const, jl_value_t *inferred,
         int32_t const_flags, size_t min_world, size_t max_world,
-        uint8_t ipo_effects, uint8_t effects
+        uint32_t ipo_effects, uint32_t effects
         /*, jl_array_t *edges, int absolute_max*/)
 {
     jl_task_t *ct = jl_current_task;

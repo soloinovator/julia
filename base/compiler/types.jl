@@ -31,9 +31,10 @@ struct Effects
     consistent::TriState
     effect_free::TriState
     nothrow::TriState
+    nothrow_if_inbounds::TriState
     terminates::TriState
 end
-Effects() = Effects(TRISTATE_UNKNOWN, TRISTATE_UNKNOWN, TRISTATE_UNKNOWN, TRISTATE_UNKNOWN)
+Effects() = Effects(TRISTATE_UNKNOWN, TRISTATE_UNKNOWN, TRISTATE_UNKNOWN, TRISTATE_UNKNOWN, TRISTATE_UNKNOWN)
 
 is_total_or_error(effects::Effects) =
     effects.consistent === ALWAYS_TRUE && effects.effect_free === ALWAYS_TRUE &&
@@ -42,24 +43,31 @@ is_total_or_error(effects::Effects) =
 is_total(effects::Effects) =
     is_total_or_error(effects) && effects.nothrow === ALWAYS_TRUE
 
-is_removable_if_unused(effects::Effects) =
+is_removable_if_unused(effects::Effects, assume_inbounds::Bool) =
     effects.effect_free === ALWAYS_TRUE &&
     effects.terminates === ALWAYS_TRUE &&
-    effects.nothrow === ALWAYS_TRUE
+    (effects.nothrow === ALWAYS_TRUE ||
+    (assume_inbounds && effects.nothrow_if_inbounds === ALWAYS_TRUE))
 
-const EFFECTS_TOTAL = Effects(ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE)
+const EFFECTS_TOTAL = Effects(ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE)
 
-encode_effects(e::Effects) = e.consistent.state | (e.effect_free.state << 2) | (e.nothrow.state << 4) | (e.terminates.state << 6)
-decode_effects(e::UInt8) =
+encode_effects(e::Effects) = e.consistent.state |
+    (e.effect_free.state << 2) |
+    (e.nothrow.state << 4) |
+    (e.nothrow_if_inbounds.state << 6) |
+    (UInt32(e.terminates.state) << 8)
+decode_effects(e::UInt32) =
     Effects(TriState(e & 0x3),
         TriState((e >> 2) & 0x3),
         TriState((e >> 4) & 0x3),
-        TriState((e >> 6) & 0x3))
+        TriState((e >> 6) & 0x3),
+        TriState((e >> 8) & 0x3))
 
 struct EffectsOverride
     consistent::Bool
     effect_free::Bool
     nothrow::Bool
+    nothrow_if_inbounds::Bool
     terminates::Bool
     terminates_locally::Bool
 end
@@ -69,8 +77,9 @@ function encode_effects_override(eo::EffectsOverride)
     eo.consistent && (e |= 0x01)
     eo.effect_free && (e |= 0x02)
     eo.nothrow && (e |= 0x04)
-    eo.terminates && (e |= 0x08)
-    eo.terminates_locally && (e |= 0x10)
+    eo.nothrow_if_inbounds && (e |= 0x08)
+    eo.terminates && (e |= 0x10)
+    eo.terminates_locally && (e |= 0x20)
     e
 end
 
@@ -80,7 +89,8 @@ decode_effects_override(e::UInt8) =
         (e >> 1) & 0x01 != 0x00,
         (e >> 2) & 0x01 != 0x00,
         (e >> 3) & 0x01 != 0x00,
-        (e >> 4) & 0x01 != 0x00)
+        (e >> 4) & 0x01 != 0x00,
+        (e >> 5) & 0x01 != 0x00)
 
 """
     InferenceResult

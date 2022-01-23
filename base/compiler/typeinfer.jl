@@ -422,7 +422,7 @@ function rt_adjust_effects(@nospecialize(rt), ipo_effects::Effects)
     # Fix that up here to improve precision.
     if rt === Union{}
         return Effects(ALWAYS_TRUE, ipo_effects.effect_free,
-            ipo_effects.nothrow, ipo_effects.terminates)
+            ipo_effects.nothrow, ipo_effects.nothrow_if_inbounds, ipo_effects.terminates)
     end
     return ipo_effects
 end
@@ -797,6 +797,8 @@ function tristate_merge(old::Effects, new::Effects)
             old.effect_free, new.effect_free),
         tristate_merge(
             old.nothrow, new.nothrow),
+        tristate_merge(
+            old.nothrow_if_inbounds, new.nothrow_if_inbounds),
         tristate_merge(
             old.terminates, new.terminates))
 end

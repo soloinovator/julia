@@ -1603,7 +1603,7 @@ function array_type_undefable(@nospecialize(arytype))
 end
 
 function array_builtin_common_nothrow(argtypes::Vector{Any}, first_idx_idx::Int)
-    length(argtypes) >= 4 || return false
+    length(argtypes) >= first_idx_idx || return false
     boundscheck = argtypes[1]
     arytype = argtypes[2]
     array_builtin_common_typecheck(boundscheck, arytype, argtypes, first_idx_idx) || return false
@@ -1733,21 +1733,22 @@ const _SPECIAL_BUILTINS = Any[
     Core._apply_iterate
 ]
 
-function builtin_effects(f::Builtin, argtypes::Vector{Any}, rt)
+function builtin_effects(f::Builtin, arginfo::ArgInfo, rt)
     if isa(f, IntrinsicFunction)
-        return intrinsic_effects(f, argtypes)
+        return intrinsic_effects(f, arginfo.argtypes)
     end
+    (;argtypes, fargs) = arginfo
 
     @assert !contains_is(_SPECIAL_BUILTINS, f)
 
     if (f === Core.getfield || f === Core.isdefined) && length(argtypes) >= 2
         # consistent if the argtype is immutable
         if isvarargtype(argtypes[2])
-            return Effects(TRISTATE_UNKNOWN, ALWAYS_TRUE, TRISTATE_UNKNOWN, ALWAYS_TRUE)
+            return Effects(TRISTATE_UNKNOWN, ALWAYS_TRUE, TRISTATE_UNKNOWN, TRISTATE_UNKNOWN, ALWAYS_TRUE)
         end
         s = widenconst(argtypes[2])
         if isType(s) || !isa(s, DataType) || isabstracttype(s)
-            return Effects(TRISTATE_UNKNOWN, ALWAYS_TRUE, TRISTATE_UNKNOWN, ALWAYS_TRUE)
+            return Effects(TRISTATE_UNKNOWN, ALWAYS_TRUE, TRISTATE_UNKNOWN, TRISTATE_UNKNOWN, ALWAYS_TRUE)
         end
         s = s::DataType
         ipo_consistent = !ismutabletype(s)
@@ -1758,10 +1759,20 @@ function builtin_effects(f::Builtin, argtypes::Vector{Any}, rt)
     nothrow = isvarargtype(argtypes[end]) ? false :
         builtin_nothrow(f, argtypes[2:end], rt)
 
+    nothrow_if_inbounds = nothrow
+
+    if !nothrow && f === Core.arrayref && fargs !== nothing && length(fargs) >= 3 &&
+            isexpr(fargs[2], :boundscheck) && !isvarargtype(argtypes[end])
+        new_argtypes = argtypes[3:end]
+        pushfirst!(new_argtypes, Const(false))
+        nothrow_if_inbounds = builtin_nothrow(f, new_argtypes, rt)
+    end
+
     return Effects(
         ipo_consistent ? ALWAYS_TRUE : ALWAYS_FALSE,
         effect_free ? ALWAYS_TRUE : ALWAYS_FALSE,
         nothrow ? ALWAYS_TRUE : TRISTATE_UNKNOWN,
+        nothrow_if_inbounds ? ALWAYS_TRUE : TRISTATE_UNKNOWN,
         ALWAYS_TRUE)
 end
 
@@ -1926,7 +1937,7 @@ function intrinsic_effects(f::IntrinsicFunction, argtypes::Vector{Any})
     if f === Intrinsics.llvmcall
         # llvmcall can do arbitrary things
         return Effects(TRISTATE_UNKNOWN, TRISTATE_UNKNOWN,
-            TRISTATE_UNKNOWN, TRISTATE_UNKNOWN)
+            TRISTATE_UNKNOWN, TRISTATE_UNKNOWN, TRISTATE_UNKNOWN)
     end
 
     ipo_consistent = !(f === Intrinsics.pointerref || # this one is volatile
@@ -1943,6 +1954,7 @@ function intrinsic_effects(f::IntrinsicFunction, argtypes::Vector{Any})
     return Effects(
         ipo_consistent ? ALWAYS_TRUE : ALWAYS_FALSE,
         effect_free ? ALWAYS_TRUE : ALWAYS_FALSE,
+        nothrow ? ALWAYS_TRUE : TRISTATE_UNKNOWN,
         nothrow ? ALWAYS_TRUE : TRISTATE_UNKNOWN,
         ALWAYS_TRUE)
 end

@@ -28,6 +28,21 @@ function should_infer_for_effects(sv::InferenceState)
     sv.ipo_effects.effect_free === ALWAYS_TRUE
 end
 
+function merge_statement_effect!(sv::InferenceState, effects::Effects)
+    stmt_inbounds = get_curr_ssaflag(sv) & IR_FLAG_INBOUNDS != 0
+    propagate_inbounds = sv.src.propagate_inbounds
+    # Look at inbounds state and see what we need to do about :nothrow_if_inbounds
+    adjusted_effects = Effects(
+        effects.consistent,
+        effects.effect_free,
+        stmt_inbounds ? effects.nothrow_if_inbounds : effects.nothrow,
+        propagate_inbounds ? effects.nothrow_if_inbounds :
+            (effects.nothrow === ALWAYS_TRUE ? ALWAYS_TRUE : TRISTATE_UNKNOWN),
+        effects.terminates
+    )
+    tristate_merge!(sv, adjusted_effects)
+end
+
 function abstract_call_gf_by_type(interp::AbstractInterpreter, @nospecialize(f),
                                   arginfo::ArgInfo, @nospecialize(atype),
                                   sv::InferenceState, max_methods::Int = get_max_methods(sv.mod, interp))
@@ -40,7 +55,7 @@ function abstract_call_gf_by_type(interp::AbstractInterpreter, @nospecialize(f),
         # aren't any in the throw block either to enable other optimizations.
         add_remark!(interp, sv, "Skipped call in throw block")
         tristate_merge!(sv, Effects(ALWAYS_TRUE, TRISTATE_UNKNOWN,
-            TRISTATE_UNKNOWN, TRISTATE_UNKNOWN))
+            TRISTATE_UNKNOWN, TRISTATE_UNKNOWN, TRISTATE_UNKNOWN))
         return CallMeta(Any, false)
     end
 
@@ -106,7 +121,7 @@ function abstract_call_gf_by_type(interp::AbstractInterpreter, @nospecialize(f),
                         rt = const_rt
                     end
                 end
-                tristate_merge!(sv, effects)
+                merge_statement_effect!(sv, effects)
                 push!(const_results, const_result)
                 if const_result !== nothing
                     any_const_result = true
@@ -148,7 +163,7 @@ function abstract_call_gf_by_type(interp::AbstractInterpreter, @nospecialize(f),
                     this_rt = const_this_rt
                 end
             end
-            tristate_merge!(sv, effects)
+            merge_statement_effect!(sv, effects)
             push!(const_results, const_result)
             if const_result !== nothing
                 any_const_result = true
@@ -185,7 +200,7 @@ function abstract_call_gf_by_type(interp::AbstractInterpreter, @nospecialize(f),
         tristate_merge!(sv, Effects())
     elseif !(atype <: merged_sig)
         # Account for the fact that we may encounter a non-covered signature.
-        tristate_merge!(sv, Effects(ALWAYS_TRUE, ALWAYS_TRUE, TRISTATE_UNKNOWN, ALWAYS_TRUE))
+        tristate_merge!(sv, Effects(ALWAYS_TRUE, ALWAYS_TRUE, TRISTATE_UNKNOWN, TRISTATE_UNKNOWN, ALWAYS_TRUE))
     end
 
     rettype = from_interprocedural!(rettype, sv, arginfo, conditionals)
@@ -599,7 +614,7 @@ function abstract_call_method(interp::AbstractInterpreter, method::Method, @nosp
         # Some sort of recursion was detected. Even if we did not limit types,
         # we cannot guarantee that the call will terminate.
         edge_effects = tristate_merge(edge_effects,
-            Effects(ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE, TRISTATE_UNKNOWN))
+            Effects(ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE, TRISTATE_UNKNOWN))
     end
     return MethodCallResult(rt, edgecycle, edgelimited, edge, edge_effects)
 end
@@ -1472,7 +1487,7 @@ function abstract_call_known(interp::AbstractInterpreter, @nospecialize(f),
             return abstract_modifyfield!(interp, argtypes, sv)
         end
         rt = abstract_call_builtin(interp, f, arginfo, sv, max_methods)
-        tristate_merge!(sv, builtin_effects(f, argtypes, rt))
+        tristate_merge!(sv, builtin_effects(f, arginfo, rt))
         return CallMeta(rt, false)
     elseif isa(f, Core.OpaqueClosure)
         # calling an OpaqueClosure about which we have no information returns no information
@@ -1792,7 +1807,9 @@ function abstract_eval_statement(interp::AbstractInterpreter, @nospecialize(e), 
         end
         tristate_merge!(sv, Effects(
             !ismutabletype(t) ? ALWAYS_TRUE : ALWAYS_FALSE,
-            ALWAYS_TRUE, is_nothrow ? ALWAYS_TRUE : ALWAYS_FALSE, ALWAYS_TRUE))
+            ALWAYS_TRUE, is_nothrow ? ALWAYS_TRUE : ALWAYS_FALSE,
+            is_nothrow ? ALWAYS_TRUE : ALWAYS_FALSE,
+            ALWAYS_TRUE))
     elseif ehead === :splatnew
         t, isexact = instanceof_tfunc(abstract_eval_value(interp, e.args[1], vtypes, sv))
         is_nothrow = false # TODO: More precision
@@ -1812,6 +1829,7 @@ function abstract_eval_statement(interp::AbstractInterpreter, @nospecialize(e), 
         tristate_merge!(sv, Effects(
             ismutabletype(t) ? ALWAYS_FALSE : ALWAYS_TRUE,
             ALWAYS_TRUE, is_nothrow ? ALWAYS_TRUE : ALWAYS_FALSE,
+            is_nothrow ? ALWAYS_TRUE : ALWAYS_FALSE,
             ALWAYS_TRUE))
     elseif ehead === :new_opaque_closure
         tristate_merge!(sv, Effects()) # TODO
@@ -1850,6 +1868,7 @@ function abstract_eval_statement(interp::AbstractInterpreter, @nospecialize(e), 
                 effects.consistent ? ALWAYS_TRUE : TRISTATE_UNKNOWN,
                 effects.effect_free ? ALWAYS_TRUE : TRISTATE_UNKNOWN,
                 effects.nothrow ? ALWAYS_TRUE : TRISTATE_UNKNOWN,
+                effects.nothrow_if_inbounds ? ALWAYS_TRUE : TRISTATE_UNKNOWN,
                 effects.terminates ? ALWAYS_TRUE : TRISTATE_UNKNOWN,
             ))
         else
@@ -1931,10 +1950,10 @@ function abstract_eval_global(M::Module, s::Symbol, frame::InferenceState)
         if isconst(M,s)
             return Const(getfield(M,s))
         else
-            tristate_merge!(frame, Effects(ALWAYS_FALSE, ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE))
+            tristate_merge!(frame, Effects(ALWAYS_FALSE, ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE))
         end
     else
-        tristate_merge!(frame, Effects(ALWAYS_FALSE, ALWAYS_TRUE, ALWAYS_FALSE, ALWAYS_TRUE))
+        tristate_merge!(frame, Effects(ALWAYS_FALSE, ALWAYS_TRUE, ALWAYS_FALSE, ALWAYS_FALSE, ALWAYS_TRUE))
     end
     return Any
 end
@@ -2023,7 +2042,7 @@ function handle_control_backedge!(frame::InferenceState, from, to)
         if isa(frame.linfo.def, Method) && decode_effects_override(frame.linfo.def.purity).terminates_locally
             return
         end
-        tristate_merge!(frame, Effects(ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE, TRISTATE_UNKNOWN))
+        tristate_merge!(frame, Effects(ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE, TRISTATE_UNKNOWN))
     end
 end
 
@@ -2179,7 +2198,7 @@ function typeinf_local(interp::AbstractInterpreter, frame::InferenceState)
                     if isa(lhs, SlotNumber)
                         changes = StateUpdate(lhs, VarState(t, false), changes, false)
                     elseif isa(lhs, GlobalRef)
-                        tristate_merge!(frame, Effects(ALWAYS_TRUE, ALWAYS_FALSE, TRISTATE_UNKNOWN, ALWAYS_TRUE))
+                        tristate_merge!(frame, Effects(ALWAYS_TRUE, ALWAYS_FALSE, TRISTATE_UNKNOWN, TRISTATE_UNKNOWN, ALWAYS_TRUE))
                     elseif !isa(lhs, SSAValue)
                         tristate_merge!(frame, Effects())
                     end

@@ -927,3 +927,11 @@ let b = Expr(:block, (:(y += sin($x)) for x in randn(1000))...)
     end
 end
 @test fully_eliminated(f_sin_perf, Tuple{})
+
+# unusued, total, noinline, propagates_inbounds to arrayref
+@noinline Base.@propagate_inbounds f_total_noinline_propagates_inbounds(x, i) = x[i]
+function f_call_total_noinline_propgates_inbounds(x)
+    @inbounds f_total_noinline_propagates_inbounds(x, 1)
+    return nothing
+end
+@test fully_eliminated(f_call_total_noinline_propgates_inbounds, Tuple{Vector{Float64}})
