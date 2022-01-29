@@ -27,6 +27,7 @@ mutable struct InferenceState
     sptypes::Vector{Any}    # types of static parameter
     slottypes::Vector{Any}
     mod::Module
+    curbb::Int
     currpc::LineNum
     pclimitations::IdSet{InferenceState} # causes of precision restrictions (LimitedAccuracy) on currpc ssavalue
     limitations::IdSet{InferenceState} # causes of precision restrictions (LimitedAccuracy) on return
@@ -36,12 +37,12 @@ mutable struct InferenceState
     world::UInt
     valid_worlds::WorldRange
     nargs::Int
-    stmt_types::Vector{Union{Nothing, VarTable}}
     stmt_edges::Vector{Union{Nothing, Vector{Any}}}
     stmt_info::Vector{Any}
     # return type
     bestguess #::Type
     # current active instruction pointers
+    was_reached::BitSet
     ip::BitSet
     pc´´::LineNum
     nstmts::Int
@@ -71,73 +72,91 @@ mutable struct InferenceState
     # NativeInterpreter. But other interpreters may use this to detect cycles
     interp::AbstractInterpreter
 
-    # src is assumed to be a newly-allocated CodeInfo, that can be modified in-place to contain intermediate results
-    function InferenceState(result::InferenceResult, src::CodeInfo,
-                            cache::Symbol, interp::AbstractInterpreter)
-        (; def) = linfo = result.linfo
-        code = src.code::Vector{Any}
+    cfg::CFG
 
-        params = InferenceParams(interp)
+    # TODO: Could keep this sparsely by doing liveness structural liveness
+    # analysis ahead of time.
+    bb_vars::Vector{VarTable}
 
-        sp = sptypes_from_meth_instance(linfo::MethodInstance)
-
-        nssavalues = src.ssavaluetypes::Int
-        src.ssavaluetypes = Any[ NOT_FOUND for i = 1:nssavalues ]
-        stmt_info = Any[ nothing for i = 1:length(code) ]
-
-        n = length(code)
-        s_types = Union{Nothing, VarTable}[ nothing for i = 1:n ]
-        s_edges = Union{Nothing, Vector{Any}}[ nothing for i = 1:n ]
-
-        # initial types
-        nslots = length(src.slotflags)
-        argtypes = result.argtypes
-        nargs = length(argtypes)
-        s_argtypes = VarTable(undef, nslots)
-        slottypes = Vector{Any}(undef, nslots)
-        for i in 1:nslots
-            at = (i > nargs) ? Bottom : argtypes[i]
-            s_argtypes[i] = VarState(at, i > nargs)
-            slottypes[i] = at
-        end
-        s_types[1] = s_argtypes
-
-        ssavalue_uses = find_ssavalue_uses(code, nssavalues)
-
-        # exception handlers
-        ip = BitSet()
-        handler_at = compute_trycatch(src.code, ip)
-        push!(ip, 1)
-
-        # `throw` block deoptimization
-        params.unoptimize_throw_blocks && mark_throw_blocks!(src, handler_at)
-
-        mod = isa(def, Method) ? def.module : def
-        valid_worlds = WorldRange(src.min_world,
-            src.max_world == typemax(UInt) ? get_world_counter() : src.max_world)
-
-        @assert cache === :no || cache === :local || cache === :global
-        frame = new(
-            params, result, linfo,
-            sp, slottypes, mod, 0,
-            IdSet{InferenceState}(), IdSet{InferenceState}(),
-            src, get_world_counter(interp), valid_worlds,
-            nargs, s_types, s_edges, stmt_info,
-            Union{}, ip, 1, n, handler_at,
-            ssavalue_uses,
-            Vector{Tuple{InferenceState,LineNum}}(), # cycle_backedges
-            Vector{InferenceState}(), # callers_in_cycle
-            #=parent=#nothing,
-            cache === :global, false, false,
-            Effects(ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE),
-            CachedMethodTable(method_table(interp)),
-            interp)
-        result.result = frame
-        cache !== :no && push!(get_inference_cache(interp), result)
-        return frame
-    end
+    pc_vars::VarTable
 end
+
+# src is assumed to be a newly-allocated CodeInfo, that can be modified in-place to contain intermediate results
+function InferenceState(result::InferenceResult, src::CodeInfo,
+                        cache::Symbol, interp::AbstractInterpreter)
+    (; def) = linfo = result.linfo
+    code = src.code::Vector{Any}
+
+    params = InferenceParams(interp)
+
+    sp = sptypes_from_meth_instance(linfo::MethodInstance)
+
+    nssavalues = src.ssavaluetypes::Int
+    src.ssavaluetypes = Any[ NOT_FOUND for i = 1:nssavalues ]
+    stmt_info = Any[ nothing for i = 1:length(code) ]
+
+    n = length(code)
+    s_edges = Union{Nothing, Vector{Any}}[ nothing for i = 1:n ]
+
+    # initial types
+    nslots = length(src.slotflags)
+    argtypes = result.argtypes
+    nargs = length(argtypes)
+    slottypes = Vector{Any}(undef, nslots)
+    pc_vars = VarTable(undef, nslots)
+    bb_entry_proto = VarTable(undef, nslots)
+    for i in 1:nslots
+        at = (i > nargs) ? Bottom : argtypes[i]
+        pc_vars[i] = VarState(at, i > nargs)
+        bb_entry_proto[i] = VarState(Bottom, i > nargs)
+        slottypes[i] = at
+    end
+
+    ssavalue_uses = find_ssavalue_uses(code, nssavalues)
+
+    # exception handlers
+    ip = BitSet()
+    handler_at = compute_trycatch(src.code, ip)
+    ip = BitSet()
+    push!(ip, 1)
+
+    # `throw` block deoptimization
+    params.unoptimize_throw_blocks && mark_throw_blocks!(src, handler_at)
+
+    mod = isa(def, Method) ? def.module : def
+    valid_worlds = WorldRange(src.min_world,
+        src.max_world == typemax(UInt) ? get_world_counter() : src.max_world)
+
+    cfg = compute_basic_blocks(code)
+
+    bb_vars = VarTable[i == 1 ? copy(pc_vars) : copy(bb_entry_proto) for i = 1:length(cfg.blocks)]
+
+    @assert cache === :no || cache === :local || cache === :global
+    frame = InferenceState(
+        params, result, linfo,
+        sp, slottypes, mod, 1, 1,
+        IdSet{InferenceState}(), IdSet{InferenceState}(),
+        src, get_world_counter(interp), valid_worlds,
+        nargs, s_edges, stmt_info,
+        Union{}, BitSet(), ip, 1, n, handler_at,
+        ssavalue_uses,
+        Vector{Tuple{InferenceState,LineNum}}(), # cycle_backedges
+        Vector{InferenceState}(), # callers_in_cycle
+        #=parent=#nothing,
+        cache === :global, false, false,
+        Effects(ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE, ALWAYS_TRUE),
+        CachedMethodTable(method_table(interp)),
+        interp, cfg, bb_vars, pc_vars)
+    result.result = frame
+    cache !== :no && push!(get_inference_cache(interp), result)
+    return frame
+end
+
 Effects(state::InferenceState) = state.ipo_effects
+
+function was_reached(frame::InferenceState, ip::Int)
+    return ip in frame.was_reached
+end
 
 function compute_trycatch(code::Vector{Any}, ip::BitSet)
     # The goal initially is to record the frame like this for the state at exit:
@@ -346,13 +365,15 @@ function record_ssa_assign(ssa_id::Int, @nospecialize(new), frame::InferenceStat
         # guarantee convergence we need to use tmerge here to ensure that is true
         ssavaluetypes[ssa_id] = old === NOT_FOUND ? new : tmerge(old, new)
         W = frame.ip
-        s = frame.stmt_types
         for r in frame.ssavalue_uses[ssa_id]
-            if s[r] !== nothing # s[r] === nothing => unreached statement
-                if r < frame.pc´´
-                    frame.pc´´ = r
+            if was_reached(frame, r)
+                usebb = block_for_inst(frame.cfg, r)
+                # We're guaranteed to visit the statement if it's in the current
+                # basic block, since SSA values can only ever appear after their
+                # def.
+                if usebb != frame.curbb
+                    push!(W, usebb)
                 end
-                push!(W, r)
             end
         end
     end

@@ -380,7 +380,7 @@ function stupdate!(state::VarTable, changes::StateUpdate)
     return newstate
 end
 
-function stupdate!(state::VarTable, changes::VarTable)
+function stupdate!(state::VarTable, changes::VarTable, ::Nothing=nothing)
     newstate = nothing
     for i = 1:length(state)
         newtype = changes[i]
@@ -393,9 +393,44 @@ function stupdate!(state::VarTable, changes::VarTable)
     return newstate
 end
 
+function stupdate!(state::VarTable, changes::VarTable, update::StateUpdate)
+    newstate = nothing
+    changeid = slot_id(update.var)
+    for i = 1:length(state)
+        if i == changeid
+            newtype = update.vtype
+        else
+            newtype = changes[i]
+        end
+        oldtype = state[i]
+        # remove any Conditional for this slot from the vtable
+        # (unless this change is came from the conditional)
+        if !update.conditional && isa(newtype, VarState)
+            newtypetyp = ignorelimited(newtype.typ)
+            if isa(newtypetyp, Conditional) && slot_id(newtypetyp.var) == changeid
+                newtypetyp = widenwrappedconditional(newtype.typ)
+                newtype = VarState(newtypetyp, newtype.undef)
+            end
+        end
+        if schanged(newtype, oldtype)
+            newstate = state
+            state[i] = smerge(oldtype, newtype)
+        end
+    end
+    return newstate
+end
+
 stupdate!(state::Nothing, changes::VarTable) = copy(changes)
 
 stupdate!(state::Nothing, changes::Nothing) = nothing
+
+function stoverwrite!(a::VarTable, b::VarTable)
+    for i = 1:length(a)
+        a[i] = b[i]
+    end
+end
+
+stupdate1!(state::VarTable, changes::Nothing) = nothing
 
 function stupdate1!(state::VarTable, change::StateUpdate)
     changeid = slot_id(change.var)
@@ -425,3 +460,30 @@ function stupdate1!(state::VarTable, change::StateUpdate)
     end
     return false
 end
+
+function stoverwrite1!(state::VarTable, change::StateUpdate)
+    changeid = slot_id(change.var)
+    # remove any Conditional for this slot from the catch block vtable
+    # (unless this change is came from the conditional)
+    if !change.conditional
+        for i = 1:length(state)
+            oldtype = state[i]
+            if isa(oldtype, VarState)
+                oldtypetyp = ignorelimited(oldtype.typ)
+                if isa(oldtypetyp, Conditional) && slot_id(oldtypetyp.var) == changeid
+                    oldtypetyp = widenconditional(oldtypetyp)
+                    if oldtype.typ isa LimitedAccuracy
+                        oldtypetyp = LimitedAccuracy(oldtypetyp, (oldtype.typ::LimitedAccuracy).causes)
+                    end
+                    state[i] = VarState(oldtypetyp, oldtype.undef)
+                end
+            end
+        end
+    end
+    # and update the type of it
+    newtype = change.vtype
+    oldtype = state[changeid]
+    state[changeid] = newtype
+    return nothing
+end
+stoverwrite1!(state::VarTable, ::Nothing) = nothing

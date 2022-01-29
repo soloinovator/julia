@@ -58,6 +58,7 @@ mutable struct OptimizationState
     linfo::MethodInstance
     src::CodeInfo
     ir::Union{Nothing, IRCode}
+    was_reached::Union{Nothing, BitSet}
     stmt_info::Vector{Any}
     mod::Module
     sptypes::Vector{Any} # static parameters
@@ -70,7 +71,7 @@ mutable struct OptimizationState
             WorldView(code_cache(interp), frame.world),
             interp)
         return new(frame.linfo,
-                   frame.src, nothing, frame.stmt_info, frame.mod,
+                   frame.src, nothing, frame.was_reached, frame.stmt_info, frame.mod,
                    frame.sptypes, frame.slottypes, inlining)
     end
     function OptimizationState(linfo::MethodInstance, src::CodeInfo, params::OptimizationParams, interp::AbstractInterpreter)
@@ -98,9 +99,14 @@ mutable struct OptimizationState
             WorldView(code_cache(interp), get_world_counter()),
             interp)
         return new(linfo,
-                   src, nothing, stmt_info, mod,
+                   src, nothing, nothing, stmt_info, mod,
                    sptypes_from_meth_instance(linfo), slottypes, inlining)
     end
+end
+
+function was_reached(sv::OptimizationState, idx::Int)
+    sv.was_reached === nothing && return true
+    return idx in sv.was_reached
 end
 
 function OptimizationState(linfo::MethodInstance, params::OptimizationParams, interp::AbstractInterpreter)
@@ -528,8 +534,36 @@ function convert_to_ircode(ci::CodeInfo, sv::OptimizationState)
     codelocs = ci.codelocs
     ssavaluetypes = ci.ssavaluetypes::Vector{Any}
     ssaflags = ci.ssaflags
+    meta = Any[]
+    function process_meta!(stmt)
+        isa(stmt, Expr) || return false
+        stmt.head === :meta || return false
+        if length(stmt.args) > 0
+            push!(meta, stmt)
+        end
+        return true
+    end
     while idx <= length(code)
         codeloc = codelocs[idx]
+        stmt = code[idx]
+        if process_meta!(stmt) || !was_reached(sv, oldidx)
+            if oldidx < length(labelmap)
+                changemap[oldidx] != 0 && (changemap[oldidx+1] = changemap[oldidx])
+                if coverage && labelmap[oldidx] != 0
+                    labelmap[oldidx + 1] = labelmap[oldidx]
+                end
+                changemap[oldidx] = -1
+                coverage && (labelmap[oldidx] = -1)
+            end
+            # TODO: It would be more efficient to do this in bulk
+            deleteat!(code, idx)
+            deleteat!(codelocs, idx)
+            deleteat!(ssavaluetypes, idx)
+            deleteat!(stmtinfo, idx)
+            deleteat!(ssaflags, idx)
+            oldidx += 1
+            continue
+        end
         if coverage && codeloc != prevloc && codeloc != 0
             # insert a side-effect instruction before the current instruction in the same basic block
             insert!(code, idx, Expr(:code_coverage_effect))
@@ -544,7 +578,13 @@ function convert_to_ircode(ci::CodeInfo, sv::OptimizationState)
             idx += 1
             prevloc = codeloc
         end
-        if code[idx] isa Expr && ssavaluetypes[idx] === Union{}
+        if isa(stmt, GotoIfNot)
+            if !was_reached(sv, oldidx + 1)
+                code[idx] = GotoNode(stmt.dest)
+            elseif !was_reached(sv, stmt.dest)
+                code[idx] = nothing
+            end
+        elseif stmt isa Expr && ssavaluetypes[idx] === Union{}
             if !(idx < length(code) && isa(code[idx + 1], ReturnNode) && !isdefined((code[idx + 1]::ReturnNode), :val))
                 # insert unreachable in the same basic block after the current instruction (splitting it)
                 insert!(code, idx + 1, ReturnNode())
@@ -562,12 +602,9 @@ function convert_to_ircode(ci::CodeInfo, sv::OptimizationState)
         idx += 1
         oldidx += 1
     end
+
     renumber_ir_elements!(code, changemap, labelmap)
 
-    meta = Any[]
-    for i = 1:length(code)
-        code[i] = remove_meta!(code[i], meta)
-    end
     strip_trailing_junk!(ci, code, stmtinfo)
     cfg = compute_basic_blocks(code)
     types = Any[]
@@ -579,16 +616,7 @@ function convert_to_ircode(ci::CodeInfo, sv::OptimizationState)
 end
 
 function remove_meta!(@nospecialize(stmt), meta::Vector{Any})
-    if isa(stmt, Expr)
-        head = stmt.head
-        if head === :meta
-            args = stmt.args
-            if length(args) > 0
-                push!(meta, stmt)
-            end
-            return nothing
-        end
-    end
+
     return stmt
 end
 
@@ -751,7 +779,9 @@ end
 
 function cumsum_ssamap!(ssamap::Vector{Int})
     rel_change = 0
+    any_change = false
     for i = 1:length(ssamap)
+        any_change = any_change || ssamap[i] != 0
         rel_change += ssamap[i]
         if ssamap[i] == -1
             # Keep a marker that this statement was deleted
@@ -760,16 +790,15 @@ function cumsum_ssamap!(ssamap::Vector{Int})
             ssamap[i] = rel_change
         end
     end
+    return any_change
 end
 
 function renumber_ir_elements!(body::Vector{Any}, ssachangemap::Vector{Int}, labelchangemap::Vector{Int})
-    cumsum_ssamap!(labelchangemap)
+    any_change = cumsum_ssamap!(labelchangemap)
     if ssachangemap !== labelchangemap
-        cumsum_ssamap!(ssachangemap)
+        any_change = cumsum_ssamap!(ssachangemap)
     end
-    if labelchangemap[end] == 0 && ssachangemap[end] == 0
-        return
-    end
+    any_change || return
     for i = 1:length(body)
         el = body[i]
         if isa(el, GotoNode)
@@ -779,7 +808,8 @@ function renumber_ir_elements!(body::Vector{Any}, ssachangemap::Vector{Int}, lab
             if isa(cond, SSAValue)
                 cond = SSAValue(cond.id + ssachangemap[cond.id])
             end
-            body[i] = GotoIfNot(cond, el.dest + labelchangemap[el.dest])
+            was_deleted = labelchangemap[el.dest] == typemin(Int)
+            body[i] = was_deleted ? cond : GotoIfNot(cond, el.dest + labelchangemap[el.dest])
         elseif isa(el, ReturnNode)
             if isdefined(el, :val)
                 val = el.val
