@@ -1779,7 +1779,7 @@ function abstract_eval_statement(interp::AbstractInterpreter, @nospecialize(e), 
                     t = Bottom
                     tristate_merge!(sv, Effects(
                         !ismutabletype(t) ? ALWAYS_TRUE : ALWAYS_FALSE,
-                        ALWAYS_TRUE, ALWAYS_FALSE, ALWAYS_TRUE))
+                        ALWAYS_TRUE, ALWAYS_FALSE, ALWAYS_FALSE, ALWAYS_TRUE))
                     @goto t_computed
                 elseif !isa(at, Const)
                     allconst = false
