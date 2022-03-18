@@ -3276,3 +3276,9 @@ end
     @test m.Foo.bar === 1
     @test Core.get_binding_type(m.Foo, :bar) == Any
 end
+
+# rewriting inner constructors with return type decls
+struct InnerCtorRT{T}
+    InnerCtorRT()::Int = new{Int}()
+end
+@test_throws MethodError InnerCtorRT()

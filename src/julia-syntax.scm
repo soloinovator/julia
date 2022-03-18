@@ -752,12 +752,13 @@
   (let* ((field-names (safe-field-names field-names field-types))
          (any-ctor
           ;; definition with Any for all arguments
-          `(function ,(with-wheres
-                       `(call ,(if (pair? params)
-                                   `(curly ,name ,@params)
-                                   name)
-                              ,@field-names)
-                       (map (lambda (b) (cons 'var-bounds b)) bounds))
+          `(function (call (|::| |#self#|
+                            ,(with-wheres
+                              `(curly (core Type) ,(if (pair? params)
+                                                       `(curly ,name ,@params)
+                                                       name))
+                              (map (lambda (b) (cons 'var-bounds b)) bounds)))
+                           ,@field-names)
                      (block
                       ,@locs
                       (call new ,@field-names)))))
@@ -791,7 +792,9 @@
 (define (num-non-varargs args)
   (count (lambda (a) (not (vararg? a))) args))
 
-(define (new-call Tname type-params sparams params args field-names field-types)
+;; selftype?: tells us whether the called object is the type being constructed,
+;; i.e. `new()` and not `new{...}()`.
+(define (new-call Tname type-params sparams params args field-names field-types selftype?)
   (if (any kwarg? args)
       (error "\"new\" does not accept keyword arguments"))
   (let ((nnv (num-non-varargs type-params)))
@@ -801,14 +804,16 @@
         (error "too many type parameters specified in \"new{...}\"")))
   (let* ((Texpr (if (null? type-params)
                     `(outerref ,Tname)
-                    `(curly (outerref ,Tname)
-                            ,@type-params)))
-         (tn (make-ssavalue))
+                    (if selftype?
+                        '|#self#|
+                        `(curly (outerref ,Tname)
+                                ,@type-params))))
+         (tn (if (symbol? Texpr) Texpr (make-ssavalue)))
          (field-convert (lambda (fld fty val)
                           (if (equal? fty '(core Any))
                               val
                               `(call (top convert)
-                                     ,(if (and (equal? type-params params) (memq fty params) (memq fty sparams))
+                                     ,(if (and (not selftype?) (equal? type-params params) (memq fty params) (memq fty sparams))
                                           fty ; the field type is a simple parameter, the usage here is of a
                                               ; local variable (currently just handles sparam) for the bijection of params to type-params
                                           `(call (core fieldtype) ,tn ,(+ fld 1)))
@@ -823,7 +828,7 @@
                (let ((argt (make-ssavalue))
                      (nf (make-ssavalue)))
                  `(block
-                   (= ,tn ,Texpr)
+                   ,@(if (symbol? tn) '() `((= ,tn ,Texpr)))
                    (= ,argt (call (core tuple) ,@args))
                    (= ,nf (call (core nfields) ,argt))
                    (if (call (top ult_int) ,nf ,(length field-names))
@@ -835,9 +840,9 @@
                    (new ,tn ,@(map (lambda (fld fty) (field-convert fld fty `(call (core getfield) ,argt ,(+ fld 1) (false))))
                                    (iota (length field-names)) (list-head field-types (length field-names))))))))
           (else
-            `(block
-              (= ,tn ,Texpr)
-              (new ,tn ,@(map field-convert (iota (length args)) (list-head field-types (length args)) args)))))))
+           `(block
+             ,@(if (symbol? tn) '() `((= ,tn ,Texpr)))
+             (new ,tn ,@(map field-convert (iota (length args)) (list-head field-types (length args)) args)))))))
 
 ;; insert item at start of arglist
 (define (arglist-unshift sig item)
@@ -856,20 +861,12 @@
          (name       (if curly? (cadr name) name))
          (sparams (map car (map analyze-typevar wheres))))
     (cond ((not (eq? name Tname))
-           `(function ,(with-wheres `(call ,(if curly?
-                                                `(curly ,name ,@curlyargs)
-                                                name)
-                                           ,@sig)
-                                    wheres)
+           `(function ,sig
                       ;; pass '() in order to require user-specified parameters with
                       ;; new{...} inside a non-ctor inner definition.
                       ,(ctor-body body '() sparams)))
           (else
-           `(function ,(with-wheres `(call ,(if curly?
-                                                `(curly ,name ,@curlyargs)
-                                                name)
-                                           ,@sig)
-                                    wheres)
+           `(function ,sig
                       ,(ctor-body body curlyargs sparams))))))
 
 ;; rewrite calls to `new( ... )` to `new` expressions on the appropriate
@@ -881,25 +878,30 @@
                        (call (-/ new) . args)
                        (new-call Tname type-params sparams params
                                  (map (lambda (a) (ctor-body a type-params sparams)) args)
-                                 field-names field-types))
+                                 field-names field-types #t))
                       (pattern-lambda
                        (call (curly (-/ new) . p) . args)
                        (new-call Tname p sparams params
                                  (map (lambda (a) (ctor-body a type-params sparams)) args)
-                                 field-names field-types)))
+                                 field-names field-types #f)))
                      body))
   (pattern-replace
    (pattern-set
+    ;; recognize `(t::(Type{X{T}} where T))(...)` as an inner-style constructor for X
+    (pattern-lambda (function       (-$ (call (|::| self (where (curly (core (-/ Type)) name) . wheres)) . sig)
+                                        (|::| (call (|::| self (where (curly (core (-/ Type)) name) . wheres)) . sig) _t))
+                                    body)
+                    (ctor-def name Tname ctor-body (cadr __) body wheres))
     ;; definitions without `where`
     (pattern-lambda (function       (-$ (call name . sig) (|::| (call name . sig) _t)) body)
-                    (ctor-def name Tname ctor-body sig body #f))
+                    (ctor-def name Tname ctor-body (cadr __) body #f))
     (pattern-lambda (= (-$ (call name . sig) (|::| (call name . sig) _t)) body)
-                    (ctor-def name Tname ctor-body sig body #f))
+                    (ctor-def name Tname ctor-body (cadr __) body #f))
     ;; definitions with `where`
     (pattern-lambda (function       (where (-$ (call name . sig) (|::| (call name . sig) _t)) . wheres) body)
-                    (ctor-def name Tname ctor-body sig body wheres))
+                    (ctor-def name Tname ctor-body (cadr __) body wheres))
     (pattern-lambda (= (where (-$ (call name . sig) (|::| (call name . sig) _t)) . wheres) body)
-                    (ctor-def name Tname ctor-body sig body wheres)))
+                    (ctor-def name Tname ctor-body (cadr __) body wheres)))
 
    ;; flatten `where`s first
    (pattern-replace
