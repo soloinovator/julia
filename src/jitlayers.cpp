@@ -986,6 +986,7 @@ JuliaOJIT::JuliaOJIT()
 #endif
     GlobalJD(ES.createBareJITDylib("JuliaGlobals")),
     JD(ES.createBareJITDylib("JuliaOJIT")),
+    LCTM(cantFail(orc::createLocalLazyCallThroughManager(TM->getTargetTriple(), ES, 0))),
     ContextPool([](){ return orc::ThreadSafeContext(std::make_unique<LLVMContext>()); }),
 #ifdef JL_USE_JITLINK
     // TODO: Port our memory management optimisations to JITLink instead of using the
@@ -1011,7 +1012,8 @@ JuliaOJIT::JuliaOJIT()
         std::make_unique<PipelineT>(ObjectLayer, *TM, 2),
         std::make_unique<PipelineT>(ObjectLayer, *TM, 3),
     },
-    OptSelLayer(Pipelines)
+    OptSelLayer(Pipelines),
+    CODLayer(ES, OptSelLayer, *LCTM, orc::createLocalIndirectStubsManagerBuilder(TM->getTargetTriple()))
 {
 #ifdef JL_USE_JITLINK
 # if defined(_OS_DARWIN_) && defined(LLVM_SHLIB)
@@ -1033,6 +1035,8 @@ JuliaOJIT::JuliaOJIT()
             registerRTDyldJITObject(Object, LO, MemMgr);
         });
 #endif
+
+    CODLayer.setPartitionFunction(CODLayerT::compileWholeModule);
 
     // Make sure SectionMemoryManager::getSymbolAddressInProcess can resolve
     // symbols in the program as well. The nullptr argument to the function
@@ -1112,11 +1116,11 @@ void JuliaOJIT::addModule(orc::ThreadSafeModule TSM)
 #endif
     });
     // TODO: what is the performance characteristics of this?
-    cantFail(OptSelLayer.add(JD, std::move(TSM)));
-    // force eager compilation (for now), due to memory management specifics
-    // (can't handle compilation recursion)
-    for (auto Name : NewExports)
-        cantFail(ES.lookup({&JD}, Name));
+    cantFail(CODLayer.add(JD, std::move(TSM)));
+    // // force eager compilation (for now), due to memory management specifics
+    // // (can't handle compilation recursion)
+    // for (auto Name : NewExports)
+    //     cantFail(ES.lookup({&JD}, Name));
 
 }
 
