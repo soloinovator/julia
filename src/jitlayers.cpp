@@ -665,48 +665,70 @@ public:
 
 RTDyldMemoryManager* createRTDyldMemoryManager(void);
 
+struct IndependentMemoryManager {
+    bool code_allocated;
+    std::unique_ptr<RTDyldMemoryManager> memmgr;
+};
+
 // A simple forwarding class, since OrcJIT v2 needs a unique_ptr, while we have a shared_ptr
 class ForwardingMemoryManager : public RuntimeDyld::MemoryManager {
 private:
-    std::shared_ptr<RuntimeDyld::MemoryManager> MemMgr;
+    JuliaOJIT::ResourcePool<IndependentMemoryManager> memmgrs{[](){ return IndependentMemoryManager{false, std::unique_ptr<RTDyldMemoryManager>(createRTDyldMemoryManager())}; }};
+    std::map<std::thread::id, SmallVector<IndependentMemoryManager>> local_stacks;
+    std::mutex mutex;
+
+    IndependentMemoryManager &getMemMgr(bool code = false) {
+        auto &stack = local_stacks[std::this_thread::get_id()];
+        if (stack.empty() || (stack.back().code_allocated && code)) {
+            stack.push_back(memmgrs.acquire());
+        }
+        stack.back().code_allocated |= code;
+        return stack.back();
+    }
+
+    void popMemMgr() {
+        memmgrs.release(local_stacks[std::this_thread::get_id()].pop_back_val());
+    }
 
 public:
-    ForwardingMemoryManager(std::shared_ptr<RuntimeDyld::MemoryManager> MemMgr) : MemMgr(MemMgr) {}
+    ForwardingMemoryManager() {}
     virtual ~ForwardingMemoryManager() = default;
     virtual uint8_t *allocateCodeSection(uintptr_t Size, unsigned Alignment,
                                      unsigned SectionID,
                                      StringRef SectionName) override {
-        return MemMgr->allocateCodeSection(Size, Alignment, SectionID, SectionName);
+        return getMemMgr(true).memmgr->allocateCodeSection(Size, Alignment, SectionID, SectionName);
     }
     virtual uint8_t *allocateDataSection(uintptr_t Size, unsigned Alignment,
                                      unsigned SectionID,
                                      StringRef SectionName,
                                      bool IsReadOnly) override {
-        return MemMgr->allocateDataSection(Size, Alignment, SectionID, SectionName, IsReadOnly);
+        return getMemMgr().memmgr->allocateDataSection(Size, Alignment, SectionID, SectionName, IsReadOnly);
     }
     virtual void reserveAllocationSpace(uintptr_t CodeSize, uint32_t CodeAlign,
                                         uintptr_t RODataSize,
                                         uint32_t RODataAlign,
                                         uintptr_t RWDataSize,
                                         uint32_t RWDataAlign) override {
-        return MemMgr->reserveAllocationSpace(CodeSize, CodeAlign, RODataSize, RODataAlign, RWDataSize, RWDataAlign);
+        return getMemMgr().memmgr->reserveAllocationSpace(CodeSize, CodeAlign, RODataSize, RODataAlign, RWDataSize, RWDataAlign);
     }
     virtual bool needsToReserveAllocationSpace() override {
-        return MemMgr->needsToReserveAllocationSpace();
+        return getMemMgr().memmgr->needsToReserveAllocationSpace();
     }
     virtual void registerEHFrames(uint8_t *Addr, uint64_t LoadAddr,
                                   size_t Size) override {
-        return MemMgr->registerEHFrames(Addr, LoadAddr, Size);
+        return getMemMgr().memmgr->registerEHFrames(Addr, LoadAddr, Size);
     }
     virtual void deregisterEHFrames() override {
-        return MemMgr->deregisterEHFrames();
+        return getMemMgr().memmgr->deregisterEHFrames();
     }
     virtual bool finalizeMemory(std::string *ErrMsg = nullptr) override {
-        return MemMgr->finalizeMemory(ErrMsg);
+        bool failed = getMemMgr().memmgr->finalizeMemory(ErrMsg);
+        popMemMgr();
+        return failed;
     }
     virtual void notifyObjectLoaded(RuntimeDyld &RTDyld,
                                     const object::ObjectFile &Obj) override {
-        return MemMgr->notifyObjectLoaded(RTDyld, Obj);
+        return getMemMgr().memmgr->notifyObjectLoaded(RTDyld, Obj);
     }
 };
 
@@ -755,6 +777,7 @@ void registerRTDyldJITObject(const object::ObjectFile &Object,
 
     jl_register_jit_object(*DebugObj, getLoadAddress,
 #if defined(_OS_WINDOWS_) && defined(_CPU_X86_64_)
+#error "TESTING POOLED MEMMGRS CAUSES THIS TO NOT WORK ON WINDOWS"
         [MemMgr](void *p) { return lookupWriteAddressFor(MemMgr.get(), p); }
 #else
         nullptr
@@ -997,11 +1020,10 @@ JuliaOJIT::JuliaOJIT()
     ObjectLayer(ES, cantFail(jitlink::InProcessMemoryManager::Create())),
 # endif
 #else
-    MemMgr(createRTDyldMemoryManager()),
     ObjectLayer(
             ES,
-            [this]() {
-                std::unique_ptr<RuntimeDyld::MemoryManager> result(new ForwardingMemoryManager(MemMgr));
+            []() {
+                std::unique_ptr<RuntimeDyld::MemoryManager> result(new ForwardingMemoryManager());
                 return result;
             }
         ),
@@ -1029,10 +1051,10 @@ JuliaOJIT::JuliaOJIT()
     ObjectLayer.addPlugin(std::make_unique<JLDebuginfoPlugin>());
 #else
     ObjectLayer.setNotifyLoaded(
-        [this](orc::MaterializationResponsibility &MR,
+        [](orc::MaterializationResponsibility &MR,
                const object::ObjectFile &Object,
                const RuntimeDyld::LoadedObjectInfo &LO) {
-            registerRTDyldJITObject(Object, LO, MemMgr);
+            registerRTDyldJITObject(Object, LO, nullptr);
         });
 #endif
 
@@ -1250,7 +1272,8 @@ size_t getRTDyldMemoryManagerTotalBytes(RTDyldMemoryManager *mm);
 
 size_t JuliaOJIT::getTotalBytes() const
 {
-    return getRTDyldMemoryManagerTotalBytes(MemMgr.get());
+    // return getRTDyldMemoryManagerTotalBytes(MemMgr.get());
+    return 0;
 }
 #endif
 

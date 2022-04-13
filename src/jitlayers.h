@@ -355,11 +355,6 @@ public:
         size_t count;
     };
 
-private:
-    // Custom object emission notification handler for the JuliaOJIT
-    template <typename ObjT, typename LoadResult>
-    void registerObject(const ObjT &Obj, const LoadResult &LO);
-
 public:
 
     JuliaOJIT();
@@ -415,9 +410,6 @@ private:
 
     ResourcePool<orc::ThreadSafeContext, 0, std::queue<orc::ThreadSafeContext>> ContextPool;
 
-#ifndef JL_USE_JITLINK
-    const std::shared_ptr<RTDyldMemoryManager> MemMgr;
-#endif
     ObjLayerT ObjectLayer;
     const std::array<std::unique_ptr<PipelineT>, 4> Pipelines;
     OptSelLayerT OptSelLayer;
