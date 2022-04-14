@@ -410,6 +410,10 @@ private:
 
     ResourcePool<orc::ThreadSafeContext, 0, std::queue<orc::ThreadSafeContext>> ContextPool;
 
+#ifndef JL_USE_JITLINK
+    std::shared_ptr<RuntimeDyld::MemoryManager> MemMgr;
+#endif
+
     ObjLayerT ObjectLayer;
     const std::array<std::unique_ptr<PipelineT>, 4> Pipelines;
     OptSelLayerT OptSelLayer;

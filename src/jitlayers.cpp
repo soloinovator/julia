@@ -666,25 +666,23 @@ public:
 RTDyldMemoryManager* createRTDyldMemoryManager(void);
 
 struct IndependentMemoryManager {
-    bool code_allocated;
     std::unique_ptr<RTDyldMemoryManager> memmgr;
 };
 
-// A simple forwarding class, since OrcJIT v2 needs a unique_ptr, while we have a shared_ptr
-class ForwardingMemoryManager : public RuntimeDyld::MemoryManager {
+// A memory manager adaptor to handle recursive codegen from compile-on-demand
+class RecursableMemoryManager : public RuntimeDyld::MemoryManager {
 private:
-    JuliaOJIT::ResourcePool<IndependentMemoryManager, 0, std::queue<IndependentMemoryManager>> memmgrs{[](){ return IndependentMemoryManager{false, std::unique_ptr<RTDyldMemoryManager>(createRTDyldMemoryManager())}; }};
+    JuliaOJIT::ResourcePool<IndependentMemoryManager, 0, std::queue<IndependentMemoryManager>> memmgrs{[](){ return IndependentMemoryManager{std::unique_ptr<RTDyldMemoryManager>(createRTDyldMemoryManager())}; }};
     std::map<std::thread::id, SmallVector<IndependentMemoryManager>> local_stacks;
     std::mutex mutex;
 
-    IndependentMemoryManager &getMemMgr(bool code = false) {
+    IndependentMemoryManager &getMemMgr() {
         std::lock_guard<std::mutex> lock(mutex);
-        auto &stack = local_stacks[std::this_thread::get_id()];
-        if (stack.empty() || (stack.back().code_allocated && code)) {
-            stack.push_back(memmgrs.acquire());
-        }
-        stack.back().code_allocated |= code;
-        return stack.back();
+        return local_stacks[std::this_thread::get_id()].back();
+    }
+
+    void pushMemMgr() {
+        local_stacks[std::this_thread::get_id()].push_back(memmgrs.acquire());
     }
 
     void popMemMgr() {
@@ -692,12 +690,12 @@ private:
     }
 
 public:
-    ForwardingMemoryManager() {}
-    virtual ~ForwardingMemoryManager() = default;
+    RecursableMemoryManager() {}
+    virtual ~RecursableMemoryManager() = default;
     virtual uint8_t *allocateCodeSection(uintptr_t Size, unsigned Alignment,
                                      unsigned SectionID,
                                      StringRef SectionName) override {
-        return getMemMgr(true).memmgr->allocateCodeSection(Size, Alignment, SectionID, SectionName);
+        return getMemMgr().memmgr->allocateCodeSection(Size, Alignment, SectionID, SectionName);
     }
     virtual uint8_t *allocateDataSection(uintptr_t Size, unsigned Alignment,
                                      unsigned SectionID,
@@ -713,6 +711,7 @@ public:
         return getMemMgr().memmgr->reserveAllocationSpace(CodeSize, CodeAlign, RODataSize, RODataAlign, RWDataSize, RWDataAlign);
     }
     virtual bool needsToReserveAllocationSpace() override {
+        pushMemMgr();
         return getMemMgr().memmgr->needsToReserveAllocationSpace();
     }
     virtual void registerEHFrames(uint8_t *Addr, uint64_t LoadAddr,
@@ -730,6 +729,51 @@ public:
     virtual void notifyObjectLoaded(RuntimeDyld &RTDyld,
                                     const object::ObjectFile &Obj) override {
         return getMemMgr().memmgr->notifyObjectLoaded(RTDyld, Obj);
+    }
+};
+
+// A simple forwarding class, since OrcJIT v2 needs a unique_ptr, while we have a shared_ptr
+class ForwardingMemoryManager : public RuntimeDyld::MemoryManager {
+private:
+    std::shared_ptr<RuntimeDyld::MemoryManager> MemMgr;
+
+public:
+    ForwardingMemoryManager(std::shared_ptr<RuntimeDyld::MemoryManager> MemMgr) : MemMgr(MemMgr) {}
+    virtual ~ForwardingMemoryManager() = default;
+    virtual uint8_t *allocateCodeSection(uintptr_t Size, unsigned Alignment,
+                                     unsigned SectionID,
+                                     StringRef SectionName) override {
+        return MemMgr->allocateCodeSection(Size, Alignment, SectionID, SectionName);
+    }
+    virtual uint8_t *allocateDataSection(uintptr_t Size, unsigned Alignment,
+                                     unsigned SectionID,
+                                     StringRef SectionName,
+                                     bool IsReadOnly) override {
+        return MemMgr->allocateDataSection(Size, Alignment, SectionID, SectionName, IsReadOnly);
+    }
+    virtual void reserveAllocationSpace(uintptr_t CodeSize, uint32_t CodeAlign,
+                                        uintptr_t RODataSize,
+                                        uint32_t RODataAlign,
+                                        uintptr_t RWDataSize,
+                                        uint32_t RWDataAlign) override {
+        return MemMgr->reserveAllocationSpace(CodeSize, CodeAlign, RODataSize, RODataAlign, RWDataSize, RWDataAlign);
+    }
+    virtual bool needsToReserveAllocationSpace() override {
+        return MemMgr->needsToReserveAllocationSpace();
+    }
+    virtual void registerEHFrames(uint8_t *Addr, uint64_t LoadAddr,
+                                  size_t Size) override {
+        return MemMgr->registerEHFrames(Addr, LoadAddr, Size);
+    }
+    virtual void deregisterEHFrames() override {
+        return MemMgr->deregisterEHFrames();
+    }
+    virtual bool finalizeMemory(std::string *ErrMsg = nullptr) override {
+        return MemMgr->finalizeMemory(ErrMsg);
+    }
+    virtual void notifyObjectLoaded(RuntimeDyld &RTDyld,
+                                    const object::ObjectFile &Obj) override {
+        return MemMgr->notifyObjectLoaded(RTDyld, Obj);
     }
 };
 
@@ -1021,10 +1065,12 @@ JuliaOJIT::JuliaOJIT()
     ObjectLayer(ES, cantFail(jitlink::InProcessMemoryManager::Create())),
 # endif
 #else
+    // MemMgr(std::shared_ptr<RuntimeDyld::MemoryManager>(createRTDyldMemoryManager())),
+    MemMgr(std::shared_ptr<RuntimeDyld::MemoryManager>(new RecursableMemoryManager())),
     ObjectLayer(
             ES,
-            []() {
-                std::unique_ptr<RuntimeDyld::MemoryManager> result(new ForwardingMemoryManager());
+            [this]() {
+                std::unique_ptr<RuntimeDyld::MemoryManager> result(new ForwardingMemoryManager(MemMgr));
                 return result;
             }
         ),
@@ -1059,7 +1105,7 @@ JuliaOJIT::JuliaOJIT()
         });
 #endif
 
-    CODLayer.setPartitionFunction(CODLayerT::compileWholeModule);
+    // CODLayer.setPartitionFunction(CODLayerT::compileWholeModule);
 
     // Make sure SectionMemoryManager::getSymbolAddressInProcess can resolve
     // symbols in the program as well. The nullptr argument to the function
@@ -1140,6 +1186,7 @@ void JuliaOJIT::addModule(orc::ThreadSafeModule TSM)
     });
     // TODO: what is the performance characteristics of this?
     cantFail(CODLayer.add(JD, std::move(TSM)));
+    // cantFail(OptSelLayer.add(JD, std::move(TSM)));
     // // force eager compilation (for now), due to memory management specifics
     // // (can't handle compilation recursion)
     // for (auto Name : NewExports)
