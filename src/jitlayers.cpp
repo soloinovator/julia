@@ -673,11 +673,12 @@ struct IndependentMemoryManager {
 // A simple forwarding class, since OrcJIT v2 needs a unique_ptr, while we have a shared_ptr
 class ForwardingMemoryManager : public RuntimeDyld::MemoryManager {
 private:
-    JuliaOJIT::ResourcePool<IndependentMemoryManager> memmgrs{[](){ return IndependentMemoryManager{false, std::unique_ptr<RTDyldMemoryManager>(createRTDyldMemoryManager())}; }};
+    JuliaOJIT::ResourcePool<IndependentMemoryManager, 0, std::queue<IndependentMemoryManager>> memmgrs{[](){ return IndependentMemoryManager{false, std::unique_ptr<RTDyldMemoryManager>(createRTDyldMemoryManager())}; }};
     std::map<std::thread::id, SmallVector<IndependentMemoryManager>> local_stacks;
     std::mutex mutex;
 
     IndependentMemoryManager &getMemMgr(bool code = false) {
+        std::lock_guard<std::mutex> lock(mutex);
         auto &stack = local_stacks[std::this_thread::get_id()];
         if (stack.empty() || (stack.back().code_allocated && code)) {
             stack.push_back(memmgrs.acquire());
