@@ -240,21 +240,19 @@ public:
         ResourcePool(std::function<ResourceT()> creator) : creator(std::move(creator)), mutex(std::make_unique<WNMutex>()) {}
         class OwningResource {
             public:
-            OwningResource(ResourcePool &pool, ResourceT resource) : pool(pool), resource(std::move(resource)) {}
+            OwningResource(ResourcePool &pool, ResourceT resource) : pool(&pool), resource(std::move(resource)) {}
             OwningResource(const OwningResource &) = delete;
             OwningResource &operator=(const OwningResource &) = delete;
-            OwningResource(OwningResource &&) = default;
-            OwningResource &operator=(OwningResource &&) = default;
+            OwningResource(OwningResource &&other) : pool(other.pool), resource(std::move(other.resource)) {
+                other.resource.reset();
+            }
+            OwningResource &operator=(OwningResource &&other) {
+                this->pool = other.pool;
+                this->resource = std::move(other.resource);
+                other.resource.reset();
+            }
             ~OwningResource() {
-                if (resource) pool.release(std::move(*resource));
-            }
-            ResourceT release() {
-                ResourceT res(std::move(*resource));
-                resource.reset();
-                return res;
-            }
-            void reset(ResourceT res) {
-                *resource = std::move(res);
+                reset();
             }
             ResourceT &operator*() {
                 return *resource;
@@ -274,12 +272,15 @@ public:
             const ResourceT *get() const {
                 return resource.getPointer();
             }
-            explicit operator bool() const {
-                return resource;
+            void reset() {
+                if (resource) {
+                    pool->release(std::move(**this));
+                    resource.reset();
+                }
             }
             private:
-            ResourcePool &pool;
-            llvm::Optional<ResourceT> resource;
+            ResourcePool *pool;
+            Optional<ResourceT> resource;
         };
 
         OwningResource operator*() {
@@ -411,7 +412,7 @@ private:
     ResourcePool<orc::ThreadSafeContext, 0, std::queue<orc::ThreadSafeContext>> ContextPool;
 
 #ifndef JL_USE_JITLINK
-    std::shared_ptr<RuntimeDyld::MemoryManager> MemMgr;
+    ResourcePool<std::unique_ptr<RuntimeDyld::MemoryManager>, 0, std::queue<std::unique_ptr<RuntimeDyld::MemoryManager>>> MemMgrs;
 #endif
 
     ObjLayerT ObjectLayer;
