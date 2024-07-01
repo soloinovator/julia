@@ -219,7 +219,7 @@ function read_sub(from::GenericIOBuffer, a::AbstractArray{T}, offs, nel) where T
     if offs+nel-1 > length(a) || offs < 1 || nel < 0
         throw(BoundsError())
     end
-    if isbitstype(T) && isa(a,Array)
+    if isa(a, MutableDenseArrayType{UInt8})
         nb = UInt(nel * sizeof(T))
         GC.@preserve a unsafe_read(from, pointer(a, offs), nb)
     else
@@ -468,7 +468,7 @@ function take!(io::IOBuffer)
         elseif io.writable
             data = view(io.data, io.offset+1:nbytes+io.offset)
         else
-            data = copyto!(StringVector(io.size), 1, io.data, io.offset + 1, nbytes)
+            data = copyto!(StringVector(nbytes), 1, io.data, io.offset + 1, nbytes)
         end
     else
         nbytes = bytesavailable(io)
@@ -548,8 +548,8 @@ end
     return sizeof(UInt8)
 end
 
-readbytes!(io::GenericIOBuffer, b::Array{UInt8}, nb=length(b)) = readbytes!(io, b, Int(nb))
-function readbytes!(io::GenericIOBuffer, b::Array{UInt8}, nb::Int)
+readbytes!(io::GenericIOBuffer, b::MutableDenseArrayType{UInt8}, nb=length(b)) = readbytes!(io, b, Int(nb))
+function readbytes!(io::GenericIOBuffer, b::MutableDenseArrayType{UInt8}, nb::Int)
     nr = min(nb, bytesavailable(io))
     if length(b) < nr
         resize!(b, nr)

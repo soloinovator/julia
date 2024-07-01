@@ -277,6 +277,7 @@ end
     c = zeros(UInt8,8)
     @test bytesavailable(bstream) == 8
     @test !eof(bstream)
+    @test Base.reseteof(bstream) === nothing # TODO: Actually test intended effect
     read!(bstream,c)
     @test c == a[3:10]
     @test closewrite(bstream) === nothing
@@ -382,4 +383,9 @@ end
     write(io,1)
     seek(io,0)
     @test Base.read_sub(io,v,1,1) == [1,0]
+end
+
+@testset "with offset" begin
+    b = pushfirst!([0x02], 0x01)
+    @test take!(IOBuffer(b)) == [0x01, 0x02]
 end
