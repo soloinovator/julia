@@ -660,10 +660,6 @@ static void selectOptLevel(Module &M) JL_NOTSAFEPOINT {
     M.addModuleFlag(Module::Warning, "julia.optlevel", opt_level);
 }
 
-void jl_register_jit_object(const object::ObjectFile &Object,
-                            std::function<uint64_t(const StringRef &)> getLoadAddress,
-                            const jl_linker_info_t &Info);
-
 static bool isJITLinkEHFrameSection(StringRef Name) JL_NOTSAFEPOINT
 {
     // EH-frame sections are handled by the EH-frame registration plugin. Its
@@ -1017,12 +1013,12 @@ private:
 
 #if defined(LLVM_SHLIB)
 namespace JLEHFrames {
-Error registerEHFrames(orc::ExecutorAddrRange EHFrameSection) {
+static Error registerEHFrames(orc::ExecutorAddrRange EHFrameSection) {
     register_eh_frames(EHFrameSection.Start.toPtr<uint8_t *>(), static_cast<size_t>(EHFrameSection.size()));
     return Error::success();
 }
 
-Error deregisterEHFrames(orc::ExecutorAddrRange EHFrameSection) {
+static Error deregisterEHFrames(orc::ExecutorAddrRange EHFrameSection) {
     deregister_eh_frames(EHFrameSection.Start.toPtr<uint8_t *>(), static_cast<size_t>(EHFrameSection.size()));
     return Error::success();
 }
@@ -1058,9 +1054,6 @@ namespace JLEHFrames {
 }
 #endif
 #endif
-
-RTDyldMemoryManager *createRTDyldMemoryManager(void) JL_NOTSAFEPOINT;
-std::unique_ptr<jitlink::JITLinkMemoryManager> createJITLinkMemoryManager() JL_NOTSAFEPOINT;
 
 // A simple forwarding class, since OrcJIT v2 needs a unique_ptr, while we have a shared_ptr
 namespace {
