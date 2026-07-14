@@ -798,3 +798,87 @@ end
           end
           (struct_eq_assigns_test(5).x, struct_eq_assigns_test().x)
       end)) == (5, 1)
+
+@testset "(AI) inner ctor with return-type annotation and `where`" begin
+    # Regression: an inner constructor with BOTH an explicit return-type
+    # annotation and a `where` clause used to fail lowering ("No match found"),
+    # because `rewrite_ctor_sig` re-wrapped the `where` a second time — nesting
+    # it inside the `::` — when it recursed through the return-type branch.
+    m = Module()
+    JuliaLowering.include_string(m, """
+        struct Wrap{T}
+            x::T
+            function Wrap{T}(x)::Wrap{T} where {T}
+                return new{T}(x)
+            end
+        end
+    """)
+    w = JuliaLowering.include_string(m, "Wrap{Int}(5)")
+    @test w isa m.Wrap{Int}
+    @test w.x === 5
+
+    # The return-type annotation performs `convert` (matching flisp): a
+    # mismatched annotation only fails at construction time, as a MethodError
+    # from the missing `convert`, not as a lowering/type-assert error.
+    JuliaLowering.include_string(m, """
+        struct W2{T}
+            x::T
+            function W2{T}(x)::W2{Int} where {T}
+                return new{T}(x)
+            end
+        end
+    """)
+    @test JuliaLowering.include_string(m, "W2{Int}(3)") isa m.W2{Int}
+    @test_throws MethodError JuliaLowering.include_string(m, "W2{String}(\"hi\")")
+
+    # The `where`-bound typevar scopes over the return-type annotation (`::T`).
+    JuliaLowering.include_string(m, """
+        struct W4{T}
+            x::T
+            function W4{T}(x)::T where {T}
+                return new{T}(x).x
+            end
+        end
+    """)
+    @test JuliaLowering.include_string(m, "W4{Int}(9)") === 9
+
+    # Constructor name without curlies, plus return annotation and `where`.
+    JuliaLowering.include_string(m, """
+        struct B2{T}
+            x::T
+            function B2(x::T)::B2{T} where {T}
+                return new{T}(x)
+            end
+        end
+    """)
+    @test JuliaLowering.include_string(m, "B2(7)") isa m.B2{Int}
+
+    # Multiple `where`-bound typevars with subtype bounds (the shape found in
+    # FlexiChains that first surfaced this bug).
+    JuliaLowering.include_string(m, """
+        struct FS{TKey, TIIdx<:Union{Int,Nothing}, TCIdx<:Union{Int,Nothing}, TSIdx<:Real}
+            _iter::TIIdx
+            _chain::TCIdx
+            _stat::TSIdx
+            function FS{TKey}(iter::TIIdx, chain::TCIdx, stat::TSIdx)::FS{TKey,TIIdx,TCIdx,TSIdx} where {
+                TKey, TIIdx<:Union{Int,Nothing}, TCIdx<:Union{Int,Nothing}, TSIdx<:Real}
+                return new{TKey,TIIdx,TCIdx,TSIdx}(iter, chain, stat)
+            end
+        end
+    """)
+    @test JuliaLowering.include_string(m, "FS{Symbol}(1, nothing, 2.0)") isa
+        m.FS{Symbol, Int, Nothing, Float64}
+
+    # Success path of the return-type `convert` (complements the W2 failure case
+    # above): an `::Any` annotation converts by identity, so the constructor
+    # still returns the freshly-built struct.  Combined with `where`.
+    JuliaLowering.include_string(m, """
+        struct WA{T}
+            x::T
+            function WA{T}(x)::Any where {T}
+                return new{T}(x)
+            end
+        end
+    """)
+    @test JuliaLowering.include_string(m, "WA{Int}(5)") isa m.WA{Int}
+end

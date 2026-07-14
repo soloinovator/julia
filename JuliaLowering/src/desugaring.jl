@@ -3284,7 +3284,7 @@ function rewrite_ctor_sig(ctx, sig, tname, global_tname, struct_typevars, wheres
     @stm sig begin
         [K"::" x rett] -> let
             call2, ctor_self = rewrite_ctor_sig(
-                ctx, x, tname, global_tname, struct_typevars, wheres)
+                ctx, x, tname, global_tname, struct_typevars, SyntaxList(ctx))
             sig2 = @ast(ctx, sig, [K"::" call2 rett])
         end
         # recognize `(_::(Type{X{T}} where T))(...)` as an inner-style
