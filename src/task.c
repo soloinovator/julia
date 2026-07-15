@@ -189,6 +189,7 @@ static void NOINLINE save_stack(jl_ptls_t ptls, jl_task_t *lastt, jl_task_t **pt
     if (lastt->ctx.bufsz < nb) {
         asan_free_copy_stack(lastt->ctx.stkbuf, lastt->ctx.bufsz);
         buf = (void*)jl_gc_alloc_buf(ptls, nb);
+        jl_gc_wb(lastt, buf);
         lastt->ctx.stkbuf = buf;
         lastt->ctx.bufsz = nb;
     }
@@ -1593,7 +1594,7 @@ jl_task_t *jl_init_root_task(jl_ptls_t ptls, void *stack_lo, void *stack_hi)
     if (always_copy_stacks) {
         // when this is set, we will attempt to corrupt the process stack to switch tasks,
         // although this is unreliable, and thus not recommended
-        ptls->stackbase = jl_get_frame_addr();
+        ptls->stackbase = (void*)((uintptr_t)jl_get_frame_addr() & ~(uintptr_t)15);
         ptls->stacksize =  (char*)ptls->stackbase - (char*)stack_lo;
     }
     else {
