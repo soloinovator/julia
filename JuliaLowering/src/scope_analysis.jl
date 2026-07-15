@@ -708,16 +708,23 @@ function init_closure_bindings!(ctx, fname)
     end
 end
 
-function find_any_local_binding(ctx, ex)
+# sparams, globals, and top-level locals interpolated into global methods are OK
+# (the last may or may not work intentionally)
+function static_eval_disallowed_binding(ctx, ex)
     k = kind(ex)
     if k == K"BindingId"
-        bkind = get_binding(ctx, ex.var_id).kind
-        if bkind != :global && bkind != :static_parameter
-            return ex
+        b = get_binding(ctx, ex.var_id)
+        if b.kind != :global && b.kind != :static_parameter
+            lam = ctx.scopes[ctx.lambda_bindings.scope_id]
+            if is_top_scope(lam) ||
+                !(b.lambda_id == top_scope(ctx).id &&
+                enclosing_lambda(ctx, parent(ctx, lam)).id == top_scope(ctx).id)
+                return ex
+            end
         end
     elseif !is_leaf(ex) && !is_quoted(ex)
         for e in children(ex)
-            r = find_any_local_binding(ctx, e)
+            r = static_eval_disallowed_binding(ctx, e)
             if !isnothing(r)
                 return r
             end
@@ -800,14 +807,14 @@ function analyze_variables!(ctx, ex)
     elseif !needs_resolution(ex)
         return
     elseif k == K"static_eval" || k == K"foreignsymbol"
-        analyze_variables!(ctx, ex[1])
-        badvar = find_any_local_binding(ctx, ex[1])
+        badvar = static_eval_disallowed_binding(ctx, ex[1])
         if !isnothing(badvar)
             default = k == K"foreignsymbol" ?
                 "function name and library expression" : "syntax"
             name_hint = getmeta(ex, :name_hint, default)::String
             throw(LoweringError(badvar, "$(name_hint) cannot reference local variable"))
         end
+        analyze_variables!(ctx, ex[1])
         return
     elseif k == K"local" || k == K"global"
         # Presence of BindingId within local/global is ignored.

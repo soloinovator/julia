@@ -407,7 +407,7 @@ function _convert_closures(ctx::ClosureConversionCtx, ex)
             access = is_self_captured(ctx, ex) ? captured_var_access(ctx, ex) : ex
             is_boxed(ctx, ex) ? get_box_contents(ctx, ex, access) : access
         end
-    elseif is_leaf(ex) || k == K"inert" || k == K"syntaxinert" || k == K"static_eval"
+    elseif is_leaf(ex) || k == K"inert" || k == K"syntaxinert"
         ex
     elseif k == K"="
         convert_assignment(ctx, ex)

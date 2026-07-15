@@ -137,11 +137,23 @@ end
 function replace_captured_locals(ci_in::Core.CodeInfo, locals::Core.SimpleVector)
     ci = copy(ci_in)
     for (i, ex) in enumerate(ci.code)
-        if Meta.isexpr(ex, :captured_local)
-            ci.code[i] = locals[ex.args[1]::Int]
-        end
+        ci.code[i] = _replace_captured_locals(ex, locals)
     end
     ci
+end
+function _replace_captured_locals(@nospecialize(e), locals)
+    if e isa Expr
+        if e.head === :captured_local
+            locals[e.args[1]::Int]
+        else
+            # could possibly limit to foreigncall
+            Expr(e.head, map(a->_replace_captured_locals(a, locals), e.args)...)
+        end
+    elseif e isa QuoteNode
+        QuoteNode(_replace_captured_locals(e.value, locals))
+    else
+        e
+    end
 end
 
 #--------------------------------------------------
