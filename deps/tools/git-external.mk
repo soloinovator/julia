@@ -1,4 +1,8 @@
 ## A rule for making a git-external dependency ##
+# For a user-facing overview of building a dependency from a Git checkout (DEPS_GIT,
+# USE_BINARYBUILDER_<NAME>, the .version file, and editing the worktree in place), see
+# "Building a dependency from a Git checkout" in doc/src/devdocs/build/build.md
+#
 # call syntax:
 #   $(eval $(call git-external,dirname,VARNAME,file_from_download,file_from_compile,SRCDIR)
 # dirname is the folder name to create
