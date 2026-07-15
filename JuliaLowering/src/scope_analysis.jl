@@ -790,6 +790,7 @@ function analyze_variables!(ctx, ex)
     elseif !needs_resolution(ex)
         return
     elseif k == K"static_eval" || k == K"foreignsymbol"
+        analyze_variables!(ctx, ex[1])
         badvar = find_any_local_binding(ctx, ex[1])
         if !isnothing(badvar)
             default = k == K"foreignsymbol" ?

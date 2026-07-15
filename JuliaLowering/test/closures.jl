@@ -1207,3 +1207,27 @@ function f_sp_in_sig_in_lam_in_optarg(
 end
 f_sp_in_sig_in_lam_in_optarg(1.)(2)
 """) == 2
+
+@testset "sparam captured into static_eval" begin
+    @test JuliaLowering.include_string(test_mod, """
+    function f_capt_sp_in_ccall_rett(v::Vector{T}) where {T}
+        g = () -> ccall(:memset, Ptr{T}, (Ptr{Cvoid}, Cint, Csize_t), v, 0, 0)
+        g() isa Ptr
+    end
+    f_capt_sp_in_ccall_rett([1, 2])
+    """) == true
+    @test JuliaLowering.include_string(test_mod, """
+    function f_capt_sp_in_ccall_argtype(v::Vector{T}) where {T}
+        g = () -> ccall(:memset, Ptr{Cvoid}, (Ptr{T}, Cint, Csize_t), v, 0, 0)
+        g() isa Ptr
+    end
+    f_capt_sp_in_ccall_argtype([1, 2])
+    """) == true
+    @test_throws LoweringError JuliaLowering.include_string(test_mod, """
+    function f_local_in_ccall_in_closure(v)
+        T = typeof(v)
+        g = () -> ccall(:memset, Ptr{T}, (Ptr{Cvoid}, Cint, Csize_t), v, 0, 0)
+        g()
+    end
+    """)
+end
