@@ -453,6 +453,19 @@ end
 @test test_mod.ccall_with_sparams(Int) === 1
 @test test_mod.ccall_with_sparams(Float64) === 1.0
 
+# (AI) has_fcall: sparam-dependent @cfunction must not inline into a caller
+# knowing T only abstractly. The abstract field keeps T non-constant there.
+@test JuliaLowering.include_string(test_mod, """
+cfunc_has_fcall(buf::Ptr{UInt8}, len::UInt32) = Int32(0)
+get_cf(::Type{T}) where {T} = @cfunction cfunc_has_fcall Int32 (Ref{T}, Ptr{UInt8}, UInt32)
+do_cf(stream::T) where {T <: IO} = get_cf(T)
+mutable struct Box3
+    x::IO
+end
+call_it(b::Box3) = do_cf(b.x)
+call_it(Box3(IOBuffer()))
+""") isa Ptr{Cvoid}
+
 # Test that ccall can be passed static parameters in the function name
 # Note that this only works with `@generated` functions from 1.13 onwards,
 # where the function name can be evaluated at code generation time.
