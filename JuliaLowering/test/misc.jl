@@ -50,6 +50,22 @@ let x=11
 end
 """) == 220
 
+@testset "syntactic --> <: >:" begin
+    @test jl_eval(test_mod, Expr(:<:, Int, Number))
+    @test jl_eval(test_mod, Expr(:<:, Expr(:..., Expr(:tuple, Int, Number))))
+    @test jl_eval(test_mod, Expr(:>:, Number, Int))
+    @test jl_eval(test_mod, Expr(:>:, Expr(:..., Expr(:tuple, Number, Int))))
+
+    JuliaLowering.include_string(test_mod, """
+    function var"-->"(args...; kws...)
+        (args, values(kws))
+    end
+    """)
+    @test jl_eval(test_mod, Expr(:-->, 1, 2)) == ((1,2),(;))
+    @test jl_eval(test_mod, Expr(:-->, 1, Expr(:kw, :foo, 2))) == ((1,),(;foo=2))
+    @test jl_eval(test_mod, Expr(:-->, Expr(:..., (1,)))) == ((1,),(;))
+end
+
 @testset "empty symbol" begin
     @test JuliaLowering.include_string(test_mod, """
     let var\"\"=1; 1; end

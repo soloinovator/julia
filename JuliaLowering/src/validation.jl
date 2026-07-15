@@ -219,11 +219,9 @@ vst1(vcx::Validation1Context, st::SyntaxTree)::ValidationResult = @stm st begin
         # TODO: can we restrict xs[2:2:end] to identifier or .identifier?
         all(vst1, vcx, xs[2:2:end]) &
         all(vst1, vcx, xs[1:2:end])
-    [K"<:" x] -> vst1(vcx, x)
-    [K">:" x] -> vst1(vcx, x)
-    [K"<:" x y] -> vst1(vcx, x) & vst1(vcx, y)
-    [K">:" x y] -> vst1(vcx, x) & vst1(vcx, y)
-    [K"-->" xs...] -> all(vst1, vcx, xs)
+    [K"<:" xs...] -> all(vst1_call_arg, vcx, xs)
+    [K">:" xs...] -> all(vst1_call_arg, vcx, xs)
+    [K"-->" xs...] -> all(vst1_call_arg, vcx, xs)
     [K"::" x y] -> vst1(vcx, x) & vst1(vcx, y)
     # TODO: inner_cond on args[2:end]
     [K"&&" xs...] -> all(vst1, vcx, xs)
@@ -984,7 +982,7 @@ vst1_assign_lhs_nontuple(vcx, st; in_const=false, in_tuple=false) = @stm st begi
         vst1(vcx, x) & vst1(vcx, y)
     [K"ref" x is...] ->
         in_const ? @fail(st, "cannot declare this form constant") :
-        vst1(vcx, x) & all(vst1_splat_or_val, vcx, is)
+        vst1(vcx, x) & all(vst1_call_arg, vcx, is)
     [K"curly" x tvs...] ->
         vst1_ident(vcx, x; lhs=true) & all(vst1_typevar_decl, vcx, tvs)
 
@@ -1012,8 +1010,7 @@ vst1_arraylike(vcx, st) = @stm st begin
         no_assignment(xs, "array expression") & all(vst1_splat_or_val, vcx, xs)
     [K"ncat" [K"Value"] xs...] ->
         no_assignment(xs, "array expression") & all(vst1_splat_or_val, vcx, xs)
-    [K"ref" x is...] -> vst1(vcx, x) &
-        no_assignment(is, "[ ... ]") & all(vst1_splat_or_val, vcx, is)
+    [K"ref" x is...] -> vst1(vcx, x) & all(vst1_call_arg, vcx, is)
     [K"row" xs...] ->
         no_assignment(xs, "array expression") & all(vst1_splat_or_val, vcx, xs)
     [K"nrow" [K"Value"] xs...] ->
