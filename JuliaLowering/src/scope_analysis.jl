@@ -260,7 +260,8 @@ function _find_scope_decls!(ctx, scope, ex)
                 ex, "allow local BindingId as function name?")
             get!(scope.binding_assignments, b.id, ex[1]._id)
         elseif k1 === K"Identifier"
-            hasattr(ex[1], :mod) && explicit_declare_in_scope!(ctx, scope, ex[1], :global)
+            hasattr(ex[1], :mod) &&
+                explicit_declare_in_scope!(ctx, scope, ex[1], :global)
             get!(scope.assignments, NameKey(ex[1]), ex[1]._id)
             get!(ctx.layer_ids, (ex[1].context::SyntaxContext).layer,
                  length(ctx.layer_ids)+1)
@@ -522,9 +523,7 @@ function _resolve_scopes(ctx, ex::SyntaxTree,
         add_local_decls!(ctx, stmts, ex, newscope)
         push!(stmts, _resolve_scopes(ctx, ex[3], newscope))
         pop!(ctx.scope_stack)
-        lb = LambdaBindings(0, top_scope(ctx).id, top_scope(ctx).locals_capt::Dict)
-        @ast ctx ex [K"method_defs"(lambda_bindings=lb)
-            mname [K"block" tvs...] [K"block" stmts...]]
+        @ast ctx ex [K"method_defs" mname [K"block" tvs...] [K"block" stmts...]]
     elseif k == K"islocal"
         e1 = ex[1]
         islocal = kind(e1) == K"Identifier" &&
@@ -666,6 +665,13 @@ struct ClosureBindings
     capt_sp::Set{IdTag}
 end
 
+# `binding` is that in `function_decl`, `method_defs[1]`, `method[1]`,
+# `function_type[1]` when local
+struct ClosureKey
+    binding::IdTag
+    lam::ScopeId
+end
+
 ClosureBindings(name_stack) =
     ClosureBindings(name_stack, Vector{LambdaBindings}(), Set{IdTag}())
 
@@ -678,24 +684,26 @@ struct VariableAnalysisContext{Attrs} <: AbstractLoweringContext
     lifted::Bool
     # Stack of method definitions for closure naming
     method_def_stack::SyntaxList{Attrs, Vector{NodeId}}
+    closure_key_stack::Vector{ClosureKey}
     # Collection of information about each closure, principally which methods
     # are part of the closure (and hence captures).
-    closure_bindings::Dict{IdTag,ClosureBindings}
+    closure_bindings::Dict{ClosureKey,ClosureBindings}
     sp_typevars::Dict{IdTag, IdTag}
     tv_deps::Dict{IdTag, Vector{IdTag}}
 end
 
 function init_closure_bindings!(ctx, fname)
-    func_name_id = fname.var_id
-    @jl_assert get_binding(ctx, func_name_id).kind === :local fname
-    get!(ctx.closure_bindings, func_name_id) do
+    bid = fname.var_id::IdTag
+    ck = closure_key(ctx, fname)
+    @jl_assert get_binding(ctx, bid).kind === :local fname
+    get!(ctx.closure_bindings, ck) do
         name_stack = Vector{String}()
         for parentname in ctx.method_def_stack
             if kind(parentname) == K"BindingId"
                 push!(name_stack, get_binding(ctx, parentname).name)
             end
         end
-        push!(name_stack, get_binding(ctx, func_name_id).name)
+        push!(name_stack, get_binding(ctx, bid).name)
         ClosureBindings(name_stack)
     end
 end
@@ -756,11 +764,13 @@ function expand_captured_sp_deps!(ctx, cb::ClosureBindings, scope)
     end
 end
 
+function closure_key(ctx, ex)
+    @jl_assert kind(ex) === K"BindingId" ex
+    ClosureKey(ex.var_id::IdTag, ctx.lambda_bindings.scope_id)
+end
 function current_closure_bindings(ctx)
-    isempty(ctx.method_def_stack) && return nothing
-    mdef = ctx.method_def_stack[end]
-    kind(mdef) !== K"BindingId" && return nothing
-    get(ctx.closure_bindings, mdef.var_id::IdTag, nothing)
+    isempty(ctx.closure_key_stack) && return nothing
+    get(ctx.closure_bindings, ctx.closure_key_stack[end], nothing)
 end
 
 # Update ctx.bindings metadata based on binding usage
@@ -847,8 +857,10 @@ function analyze_variables!(ctx, ex)
         ctx2 = VariableAnalysisContext(
             ctx.graph, ctx.layer, ctx.bindings, ctx.scopes,
             ctx.lambda_bindings, true, ctx.method_def_stack,
+            ctx.closure_key_stack,
             ctx.closure_bindings, ctx.sp_typevars, ctx.tv_deps)
         if is_closure
+            push!(ctx.closure_key_stack, closure_key(ctx2, ex[1]))
             cb = init_closure_bindings!(ctx2, ex[1])
             scope = ctx.scopes[ctx2.lambda_bindings.scope_id]
         end
@@ -857,32 +869,33 @@ function analyze_variables!(ctx, ex)
         if is_closure
             # All captures are known now; close them over typevar-bound deps
             expand_captured_sp_deps!(ctx, cb, scope)
+            pop!(ctx.closure_key_stack)
         end
         pop!(ctx.method_def_stack)
     elseif k == K"_opaque_closure"
         name = ex[1]
         init_closure_bindings!(ctx, name)
         push!(ctx.method_def_stack, name)
+        push!(ctx.closure_key_stack, closure_key(ctx, ex[1]))
         analyze_variables!(ctx, ex[2])
         analyze_variables!(ctx, ex[3])
         analyze_variables!(ctx, ex[4])
         analyze_variables!(ctx, ex[9])
         pop!(ctx.method_def_stack)
+        pop!(ctx.closure_key_stack)
     elseif k == K"lambda"
         lambda_bindings = ex.lambda_bindings::LambdaBindings
-        if !ex.is_toplevel_thunk && !isempty(ctx.method_def_stack)
+        if !ex.is_toplevel_thunk && !isempty(ctx.closure_key_stack)
             # Record all lambdas for the same closure type in one place
-            func_name = last(ctx.method_def_stack)
-            if kind(func_name) == K"BindingId"
-                func_name_id = func_name.var_id::IdTag
-                if get_binding(ctx, func_name).kind === :local
-                    push!(ctx.closure_bindings[func_name_id].lambdas, lambda_bindings)
-                end
+            ck = last(ctx.closure_key_stack)
+            if get_binding(ctx, ck.binding).kind === :local
+                push!(ctx.closure_bindings[ck].lambdas, lambda_bindings)
             end
         end
         let ctx2 = VariableAnalysisContext(
             ctx.graph, ctx.layer, ctx.bindings, ctx.scopes,
-            lambda_bindings, false, ctx.method_def_stack, ctx.closure_bindings,
+            lambda_bindings, false, ctx.method_def_stack,
+            ctx.closure_key_stack, ctx.closure_bindings,
             ctx.sp_typevars, ctx.tv_deps)
             foreach(e->analyze_variables!(ctx2, e), ex[3:end])
         end
@@ -935,8 +948,8 @@ enclosing lambda form and information about variables captured by closures.
     ex2 = resolve_scopes(ctx2, ex)
     ctx3 = VariableAnalysisContext(graph, ctx2.layer, ctx2.bindings,
                                    ctx2.scopes, ex2.lambda_bindings, true,
-                                   SyntaxList(graph),
-                                   Dict{IdTag,ClosureBindings}(),
+                                   SyntaxList(graph), Vector{ClosureKey}(),
+                                   Dict{ClosureKey,ClosureBindings}(),
                                    ctx2.sp_typevars, ctx2.tv_deps)
     analyze_variables!(ctx3, ex2)
     analyze_def_and_use!(ctx3, ex2)
