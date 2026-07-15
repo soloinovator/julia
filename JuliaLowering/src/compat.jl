@@ -671,15 +671,12 @@ function est_to_dst(st::SyntaxTree)
         end
         ([K"latestworld"], when=!is_leaf(st)) -> newleaf(g, st, K"latestworld")
         [K"cfunction" typ fptr rt at sym] -> let
-            # Identifier callables are scope-resolved against the outermost
-            # lowering layer (which corresponds to the method module used by
-            # `method.c`'s `jl_toplevel_eval`), so the IR carries a binding
-            # reference matching `@cfunction`'s runtime resolution. Other
-            # forms (e.g. function definitions) stay inert.
+            # A symbol in fptr[1] does not observe hygiene or local scopes, but
+            # treating this as a binding is better for e.g. JETLS.
             out_fptr = if kind(fptr) == K"inert" && numchildren(fptr) == 1 &&
-                          kind(fptr[1]) == K"Identifier"
-                ident = mkleaf(fptr[1])
-                # TODO: relayer if unhygienic
+                    kind(fptr[1]) == K"Identifier"
+                sc = fptr[1].context::SyntaxContext
+                ident = setattr!(mkleaf(fptr[1]), :mod, base_layer(sc).mod)
                 @ast g fptr [K"static_eval"(fptr) ident]
             else
                 rec(fptr)

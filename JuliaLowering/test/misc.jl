@@ -360,6 +360,15 @@ Nested.@cfunction_hygiene
 """)
 @test @ccall($cf_hygiene()::Int) == 10
 
+@test JuliaLowering.include_string(test_mod, """
+cfunction_ignores_locals() = Int32(1)
+function getptr()
+    cfunction_ignores_locals = @cfunction(cfunction_ignores_locals, Int32, ())
+    cfunction_ignores_locals
+end
+getptr() isa Ptr{Cvoid}
+""")
+
 # quoted function in cfunction
 quoted_cfn_anon = JuliaLowering.include_string(test_mod, raw"""
     @cfunction((function(x); x; end), Int, (Int,))
@@ -554,7 +563,7 @@ end
             @cfunction(fcb, RT, (Int,))
         end
         g()""")
-    @test_throws TypeError cc("""
+    @test_throws UndefVarError cc("""
         let RT = Int
             fcb(x) = x + 1
             g() = @cfunction(fcb, RT, (Int,))
