@@ -690,6 +690,8 @@ struct VariableAnalysisContext{Attrs} <: AbstractLoweringContext
     closure_bindings::Dict{ClosureKey,ClosureBindings}
     sp_typevars::Dict{IdTag, IdTag}
     tv_deps::Dict{IdTag, Vector{IdTag}}
+    # Prevents infinite loops when analyzing a binding's type
+    types_in_analysis::Set{IdTag}
 end
 
 function init_closure_bindings!(ctx, fname)
@@ -797,6 +799,12 @@ function analyze_variables!(ctx, ex)
             cb = current_closure_bindings(ctx)
             isnothing(cb) || push!(cb.capt_sp, b.id)
         end
+        if (b.kind === :local || b.kind === :argument) && !isnothing(b.type) &&
+            !(b.id in ctx.types_in_analysis)
+            push!(ctx.types_in_analysis, b.id)
+            analyze_variables!(ctx, binding_type_ex(ctx, b))
+            delete!(ctx.types_in_analysis, b.id)
+        end
     elseif k == K"Identifier"
         @jl_assert false ex
     elseif k == K"break" && numchildren(ex) >= 2
@@ -865,7 +873,8 @@ function analyze_variables!(ctx, ex)
             ctx.graph, ctx.layer, ctx.bindings, ctx.scopes,
             ctx.lambda_bindings, true, ctx.method_def_stack,
             ctx.closure_key_stack,
-            ctx.closure_bindings, ctx.sp_typevars, ctx.tv_deps)
+            ctx.closure_bindings, ctx.sp_typevars, ctx.tv_deps,
+            ctx.types_in_analysis)
         if is_closure
             push!(ctx.closure_key_stack, closure_key(ctx2, ex[1]))
             cb = init_closure_bindings!(ctx2, ex[1])
@@ -903,7 +912,7 @@ function analyze_variables!(ctx, ex)
             ctx.graph, ctx.layer, ctx.bindings, ctx.scopes,
             lambda_bindings, false, ctx.method_def_stack,
             ctx.closure_key_stack, ctx.closure_bindings,
-            ctx.sp_typevars, ctx.tv_deps)
+            ctx.sp_typevars, ctx.tv_deps, ctx.types_in_analysis)
             foreach(e->analyze_variables!(ctx2, e), ex[3:end])
         end
     else
@@ -957,7 +966,7 @@ enclosing lambda form and information about variables captured by closures.
                                    ctx2.scopes, ex2.lambda_bindings, true,
                                    SyntaxList(graph), Vector{ClosureKey}(),
                                    Dict{ClosureKey,ClosureBindings}(),
-                                   ctx2.sp_typevars, ctx2.tv_deps)
+                                   ctx2.sp_typevars, ctx2.tv_deps, Set{IdTag}())
     analyze_variables!(ctx3, ex2)
     analyze_def_and_use!(ctx3, ex2)
     ctx3, ex2

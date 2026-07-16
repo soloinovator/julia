@@ -1442,3 +1442,40 @@ end
         """) == (1,2,3)
     end
 end
+
+@testset "captured type declarations" begin
+   JuliaLowering.include_string(test_mod, """
+   function f_boxed_typed_capture(v, k)
+       if k == -1
+           k::Int = maximum(v)
+       end
+       findall(x -> x >= k, v)
+   end
+   """)
+   @test test_mod.f_boxed_typed_capture([3, 1, 2], -1) == [1]
+   @test only(Base.return_types(test_mod.f_boxed_typed_capture, (Vector{Int}, Int))) ===
+       Vector{Int}
+
+   # declared types may reference locals in the outer function
+   JuliaLowering.include_string(test_mod, """
+   function f_boxed_sparam_typed(v::Vector{T}, k) where T
+       if k == -1
+           k::T = maximum(v)
+       end
+       findall(x -> x >= k, v)
+   end
+   function f_boxed_localvar_typed(v, k)
+       T = Int
+       if k == -1
+           k::T = maximum(v)
+       end
+       findall(x -> x >= k, v)
+   end
+   """)
+   @test test_mod.f_boxed_sparam_typed([3, 1, 2], -1) == [1]
+   @test only(Base.return_types(test_mod.f_boxed_sparam_typed, (Vector{Int}, Int))) ===
+       Vector{Int}
+   @test test_mod.f_boxed_localvar_typed([3, 1, 2], -1) == [1]
+   @test only(Base.return_types(test_mod.f_boxed_localvar_typed, (Vector{Int}, Int))) ===
+       Vector{Int}
+end

@@ -59,10 +59,21 @@ function captured_var_access(ctx, ex)
 end
 
 function get_box_contents(ctx::ClosureConversionCtx, var, box_ex)
-    undef_var = new_local_binding(ctx, var, get_binding(ctx, var.var_id).name;
-                                  is_used_undef=true)
+    b = get_binding(ctx, var)
+    box = ssavar(ctx, box_ex)
+    undef_var = new_local_binding(ctx, var, b.name; is_used_undef=true)
+    box_access =
+        @ast ctx var [K"call" "getfield"::K"core" box "contents"::K"Symbol"]
+    if !isnothing(b.type)
+        box_access = @ast ctx var [K"call"
+            "typeassert"::K"core"
+            box_access
+            _convert_closures(ctx, renumber_assigned_ssavalues(
+                ctx, binding_type_ex(ctx, b)))
+        ]
+    end
     @ast ctx var [K"block"
-        box := box_ex
+        [K"=" box box_ex]
         # Lower in an UndefVar check to a similarly named variable
         # (ref #20016) so that closure lowering Box introduction
         # doesn't impact the error message and the compiler is expected
@@ -70,22 +81,10 @@ function get_box_contents(ctx::ClosureConversionCtx, var, box_ex)
         #
         # TODO: Ideally the runtime would rely on provenance info for
         # this error and we can remove the isdefined check.
-        [K"if" [K"call"
-                "isdefined"::K"core"
-                box
-                "contents"::K"Symbol"
-            ]
+        [K"if" [K"call" "isdefined"::K"core" box "contents"::K"Symbol"]
             (::K"TOMBSTONE")
-            [K"block"
-                 [K"newvar" undef_var]
-                 undef_var
-            ]
-        ]
-        [K"call"
-            "getfield"::K"core"
-            box
-            "contents"::K"Symbol"
-        ]
+            [K"block" [K"newvar" undef_var] undef_var]]
+        box_access
     ]
 end
 
@@ -99,8 +98,7 @@ function convert_for_type_decl(ctx, srcref, ex, type, do_typeassert)
     tmp = new_local_binding(ctx, srcref, "tmp", is_always_defined=true)
 
     @ast ctx srcref [K"block"
-        type_tmp := type
-        # [K"=" type_ssa renumber_assigned_ssavalues(type)]
+        type_tmp := renumber_assigned_ssavalues(ctx, type)
         [K"=" tmp ex]
         [K"if"
             [K"call" "isa"::K"core" tmp type_tmp]
