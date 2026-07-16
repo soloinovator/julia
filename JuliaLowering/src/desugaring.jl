@@ -2688,11 +2688,12 @@ function keywords_method_def_expr(ctx, src, mtable, sparams, argl, body, rett)
     pos_sparams = used_typevars(pargl, sparams)
 
     m1_name = let n = kind(mtable) === K"nothing" ? "_" : mtable.name_val,
-        mangled = string(startswith(n, '#') ? "" : "#kw_body#", n, "#")
+        mangled = reserve_module_binding_i(
+            ctx.layer.mod,
+            string(startswith(n, '#') ? "" : "#kw_body#", n, "#"))
         # probably not desirable, but fixes eval-into-closed-module
-        a1 = setattr(mtable, :context,
-                     escape_layer(mtable.context::SyntaxContext, true))
-        newsym(ctx, a1, reserve_module_binding_i(syntax_module(a1), mangled))
+        setattr!(newsym(ctx, mtable, mangled),
+                 :context, escape_layer(mtable.context::SyntaxContext, true))
     end
     # (1) Body method.  This contains the actual function body, and requires
     # every possible default to be filled.  `rett` is only passed here since it

@@ -1114,7 +1114,6 @@ end
                  (Vector{Int}, 2, [10]), (Vector{Int}, 2, [1]))
     end
 
-
     @testset "destructured args" begin
         @test JL.include_string(
             test_mod, "(function ((d1,d2);kw); [d1,d2,kw]; end)((1,2);kw=3)") == [1,2,3]
@@ -1132,6 +1131,46 @@ end
         @test JL.include_string(
             test_mod, "(function ((d1,d2);kw1=1,kw2=kw1); [d1,d2,kw1,kw2]; end)((1,2);kw1=9,kw2=10)") == [1,2,9,10]
     end
+end
+
+# Brittle test, needs fixing if kw_body naming or kwarg implementation changes
+@testset "(AI) kw function helper is declared in the correct module" begin
+    # Extending another module's keyword function with a new keyword method must
+    # reserve the hidden `#kw_body#...` global in the *extending* module (the
+    # call/eval site), never in the extended function's home module -- reserving
+    # it in a foreign (possibly precompiled/closed) module breaks incremental
+    # compilation.  This is most easily broken when the method name arrives as an
+    # interpolated `GlobalRef` *value* (the StatsBase/TracedSample shape), whose
+    # `:mod` attribute would otherwise steer the reservation to the owner module.
+    kwbodies(m) = filter(s -> occursin("kw_body", String(s)), names(m; all=true))
+
+    # (a) interpolated `GlobalRef` value as the method name (the regressing case)
+    OwnerA = Module()
+    JL.include_string(OwnerA, "sample(x; y=1) = x + y")
+    a_before = Set(kwbodies(OwnerA))
+    ExtA = Module()
+    @eval ExtA const OwnerA = $OwnerA
+    JL.include_string(ExtA, """
+        let fn = GlobalRef(OwnerA, :sample)
+            @eval \$fn(x::Symbol; y=1) = y
+        end
+    """)
+    @test isempty(setdiff(Set(kwbodies(OwnerA)), a_before))  # no new global in owner
+    @test !isempty(kwbodies(ExtA))                           # reserved in extender
+    @test OwnerA.sample(3; y=10) == 13                       # original method intact
+    @test OwnerA.sample(:s; y=7) == 7                        # new method dispatches
+    @test OwnerA.sample(:s) == 1                             # ...with its own default
+
+    # (b) syntactic dotted name reaches the same conclusion (guards the common path)
+    OwnerB = Module()
+    JL.include_string(OwnerB, "sample(x; y=1) = x + y")
+    b_before = Set(kwbodies(OwnerB))
+    ExtB = Module()
+    @eval ExtB const OwnerB = $OwnerB
+    JL.include_string(ExtB, "function OwnerB.sample(x::Symbol; y=1); y; end")
+    @test isempty(setdiff(Set(kwbodies(OwnerB)), b_before))
+    @test !isempty(kwbodies(ExtB))
+    @test OwnerB.sample(:s; y=7) == 7
 end
 
 @testset "pre-desugared arg::Vararg" begin
