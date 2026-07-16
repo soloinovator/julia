@@ -1459,7 +1459,9 @@ function expand_update_operator(ctx, ex)
             lhs = emit_assign_tmp(stmts, ctx, lhs)
         end
     else
-        if kind(lhs) == K"tuple" && contains_ssa_binding(ctx, lhs)
+        if kind(lhs) == K"tuple" && contains_unquoted(
+                e->kind(e) == K"BindingId" && get_binding(ctx, e).is_ssa,
+                lhs)
             # If remove_argument_side_effects needed to replace an expression
             # with an ssavalue, then it can't be updated by assignment
             # (JuliaLang/julia#30062)

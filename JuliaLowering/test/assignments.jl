@@ -100,6 +100,16 @@ let x = [1 2; 3 4]
 end
 """) == [0 1 ; 3 4]
 
+# Tuple-destructuring updating assignment `x, y += a, b`
+@test JuliaLowering.include_string(@newmod(), """
+struct Vec1; v::Int; end
+Base.:+(a::Tuple{Vec1,Vec1}, b::Tuple{Vec1,Vec1}) = (Vec1(a[1].v+b[1].v), Vec1(a[2].v+b[2].v))
+let x = Vec1(1), y = Vec1(2)
+    x, y += Vec1(3), Vec1(4)
+    (x.v, y.v)
+end
+""") == (4, 6)
+
 @testset "lhs forms" begin
     @test JuliaLowering.include_string(test_mod, """
     mutable struct with_mutable_x; x; end
