@@ -882,3 +882,20 @@ end
     """)
     @test JuliaLowering.include_string(m, "WA{Int}(5)") isa m.WA{Int}
 end
+
+@testset "(AI) struct fields named with underscores" begin
+    # Bug in _defaultctors giving lowering a K"lambda"
+    m = Module()
+    JuliaLowering.include_string(m, """
+        struct TextItem
+            _::String
+        end
+        struct TwoScores
+            _::Int
+            __::Int
+        end
+    """)
+    @test JuliaLowering.include_string(m, """TextItem("hi")._""") == "hi"
+    t = JuliaLowering.include_string(m, "TwoScores(1, 2)")
+    @test (t._, t.__) == (1, 2)
+end

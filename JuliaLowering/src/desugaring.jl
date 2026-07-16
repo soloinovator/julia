@@ -4043,7 +4043,13 @@ end
 
 function expand_importpath(ctx, path)
     @jl_assert kind(path) == K"importpath" path
-    setattr(path, :kind, K".")
+    @ast ctx path [K"." mapsyntax(_unplaceholder, children(path))...]
+end
+
+function _unplaceholder(st)
+    k = kind(st)
+    k === K"Placeholder" ? setattr(st, :kind, K"Identifier") :
+        k === K"Identifier" ? st : @jl_assert false st
 end
 
 # importer does not obey hygiene.  Doesn't bother with relayering any imported
@@ -4074,8 +4080,8 @@ function expand_import_or_using(ctx, ex)
     for spec in paths
         if kind(spec) == K"as"
             @jl_assert numchildren(spec) == 2 spec
-            @jl_assert kind(spec[2]) == K"Identifier" spec
-            path = @ast ctx spec [K"as" expand_importpath(ctx, spec[1]) spec[2]]
+            s2 = _unplaceholder(spec[2])
+            path = @ast ctx spec [K"as" expand_importpath(ctx, spec[1]) s2]
         else
             path = expand_importpath(ctx, spec)
         end

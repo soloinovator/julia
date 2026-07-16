@@ -268,8 +268,8 @@ vst1(vcx::Validation1Context, st::SyntaxTree)::ValidationResult = @stm st begin
     [K"gc_preserve_end" ids...] -> all(vst1_ident, vcx, ids)
     [K"isdefined" [K"Identifier"]] -> pass()
     [K"lambda" [K"block" b1...] [K"block" b2...] _] ->
-        all(vst1_ident, vcx, b1) &
-        all(vst1_ident, vcx, b2) &
+        all(vst1_ident, vcx, b1; lhs=true) &
+        all(vst1_ident, vcx, b2; lhs=true) &
         (kind(st[3]) === K"->" ? vst1_lam(vcx, st[3]) :
             vst1(with(vcx; return_ok=true, toplevel=false, in_gscope=false), st[3]))
     [K"softscope" _] -> pass()
@@ -431,7 +431,8 @@ function vst1_importpath(vcx, st; dots_ok)
             end
             continue
         end
-        ok = ok & vst1_ident(vcx, c)
+        # syntax todo: lhs should probably not be true here
+        ok = ok & (vst1_ident(vcx, c).ok ? pass() : vst1_ident(vcx, c; lhs=true))
         seen_first = true
     end
     return !seen_first ? @fail(st, "expected identifier in `importpath`") : ok
