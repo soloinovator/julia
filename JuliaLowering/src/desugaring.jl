@@ -2643,7 +2643,15 @@ function expand_kw_args(ctx, kws)
     return (kw_decls, kw_names, kw_syms, kw_defaults, restkw_list)
 end
 
-function keywords_method_def_expr(ctx, src, mtable, sparams, argl, body, rett, pos_va)
+# Assumes `expand_function_arg` has run.  Note that user-supplied
+# "Vararg"::K"Identifier" is assumed to resolve to Core.Vararg
+is_vararg_type_expr(st) = @stm st begin
+    [K"curly" x _...] -> is_vararg_type_expr(x)
+    [K"where" x _...] -> is_vararg_type_expr(x)
+    _ -> kind(st) in KSet"core Identifier" && st.name_val::String == "Vararg"
+end
+
+function keywords_method_def_expr(ctx, src, mtable, sparams, argl, body, rett)
     kws = argl[end]
     pargl = argl[1:end-1]
     @jl_assert kind(kws) === K"parameters" src
@@ -2658,6 +2666,11 @@ function keywords_method_def_expr(ctx, src, mtable, sparams, argl, body, rett, p
 
     # Positional names and splatted vararg so we can `(call f forward_pargl...)`
     forward_pargl = let l = mapindex(pos_decls, 1)
+        pos_va = @stm argl[end-1] begin
+            [K"kw" [K"::" _... t] _...] -> is_vararg_type_expr(t)
+            [K"::" _... t] -> is_vararg_type_expr(t)
+            _ -> false
+        end
         pos_va && (l[end] = @ast ctx l[end] [K"..." l[end]])
         l
     end
@@ -2902,12 +2915,7 @@ function expand_function_def(ctx, src, raw_args, wheres, body, rett)
     end
     sparams = mapsyntax(typevar_bounds, wheres)
     if has_kws
-        pos_va = @stm raw_args[end-1] begin
-            [K"kw" [K"..." _] _...] -> true
-            [K"..." _] -> true
-            _ -> false
-        end
-        keywords_method_def_expr(ctx, src, mtable, sparams, argl, body, rett, pos_va)
+        keywords_method_def_expr(ctx, src, mtable, sparams, argl, body, rett)
     else
         @ast ctx src [K"block"
             (overlay || kind(mtable) === K"nothing") ? nothing : [K"function_decl" mtable]
