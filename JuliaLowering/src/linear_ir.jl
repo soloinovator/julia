@@ -423,7 +423,7 @@ end
 
 # flisp: emit-cond
 function compile_conditional(ctx, ex, false_label)
-    if kind(ex) == K"block"
+    if kind(ex) == K"block" && numchildren(ex) >= 1
         for i in 1:numchildren(ex)-1
             compile(ctx, ex[i], false, false)
         end

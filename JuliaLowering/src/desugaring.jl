@@ -1501,15 +1501,16 @@ end
 
 # Expand condition in, eg, `if` or `while`
 function expand_condition(ctx, ex)
-    isblock = kind(ex) == K"block"
+    isblock = kind(ex) == K"block" && numchildren(ex) >= 1
     test = isblock ? ex[end] : ex
     k = kind(test)
     if k == K"&&" || k == K"||"
         # `||` and `&&` get special lowering so that they compile directly to
         # jumps rather than first computing a bool and then jumping.
         cs = expand_cond_children(ctx, test)
-        @jl_assert length(cs) > 1 ex
-        test = newnode(ctx, test, k, cs)
+        test = isempty(cs) ? (@ast ctx ex (k === K"&&")::K"Bool") :
+            length(cs) == 1 ? (@ast ctx ex cs[1]) :
+            newnode(ctx, test, k, cs)
     else
         test = expand_forms_2(ctx, test)
     end
