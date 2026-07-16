@@ -636,6 +636,8 @@ function est_to_dst(st::SyntaxTree)
          when=(meta=get(s, :name_val, "")::String; meta in ("nospecialize", "specialize"))) ->
              # Should be handled in the function case
              newleaf(g, st, K"nothing")
+        ([K"meta" s gen], when=get(s, :name_val, "")::String == "generated") ->
+            @ast g st [K"meta" setattr(s, :kind, K"Symbol") rec(gen)]
         [K"meta" syms...] ->
             @ast g st [K"meta" mapsyntax(
                 s->(kind(s) === K"Identifier" ? setattr(s, :kind, K"Symbol") : s),

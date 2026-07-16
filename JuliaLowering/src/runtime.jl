@@ -267,11 +267,12 @@ struct GeneratedFunctionStub
     spnames::Core.SimpleVector
 end
 
-function _gen_args_from_syms(ctx, src, args)
+function _gen_args_from_syms(ctx, src, args, sc)
     out = SyntaxList(ctx.graph)
     for a in args
         id = newleaf(syntax_graph(ctx), src, K"Identifier", string(a))
         id = _est_to_dst_ident(id) # support placeholders
+        id = setattr!(id, :context, sc)
         push!(out, id)
     end
     out
@@ -330,8 +331,8 @@ function _lower_generated_code(g::GeneratedFunctionStub, source::Method, graph,
 
     # Wrap expansion in a non-toplevel lambda and run scope resolution
     ex2 = @ast ctx2 ex0 [K"lambda"(is_toplevel_thunk=false, toplevel_pure=true)
-        [K"block" _gen_args_from_syms(ctx2, ex1, g.argnames)...]
-        [K"block" _gen_args_from_syms(ctx2, ex1, g.spnames)...]
+        [K"block" _gen_args_from_syms(ctx2, ex1, g.argnames, sc)...]
+        [K"block" _gen_args_from_syms(ctx2, ex1, g.spnames, sc)...]
         ex2
     ]
     ctx3, ex3 = resolve_scopes(ctx2, ex2)

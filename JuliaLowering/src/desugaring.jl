@@ -2438,9 +2438,9 @@ function prepend_function_body(ctx, body, ex)
             ex_est = @stm ex begin
                 [K"meta" [K"Symbol"] n] ->
                     @ast ctx ex [K"meta" "nkw"::K"Identifier" n]
-                # TODO: need to handle destructuring arg assignments
-                [K"block" _... [K"nothing"]] ->
-                    newleaf(ctx, ex, K"Value", nothing)
+                # destructured arg assignments
+                [K"block" stmts... [K"nothing"]] ->
+                    @ast ctx ex [K"block" stmts...]
                 _ -> @jl_assert false (ex, "unexpected prepend_function_body")
             end
             @ast ctx body [K"_generated_body"
@@ -2482,13 +2482,22 @@ function _untyped_arg(a)
     @ast a._graph a [K"::" aname "Any"::K"core"]
 end
 
-function _expr_arg_sym(a)
-    @jl_assert kind(a) === K"::" || kind(a) === K"_typevar" a
-    sym = setattr(a[1], :kind, K"Symbol")
-    if kind(a[1]) === K"Placeholder"
-        setattr!(sym, :name_val, UNUSED)
+function _expr_arg_syms(args)
+    out = SyntaxList(args.graph)
+    for (i, a) in enumerate(args)
+        @jl_assert kind(a) === K"::" || kind(a) === K"_typevar" a
+        sym = setattr(a[1], :kind, K"Symbol")
+        if kind(a[1]) === K"Placeholder"
+            setattr!(sym, :name_val, UNUSED)
+        elseif (a[1].context::SyntaxContext).internal && i > 1
+            # we lose context, so deduplicate names (ignoring #self# to be
+            # safe).  HACK: destructured args must match the desugared rhs
+            n = sym.name_val::String
+            contains(n, "destructured") || setattr!(sym, :name_val, n*"#"*string(i))
+        end
+        push!(out, sym)
     end
-    sym
+    out
 end
 
 # The Julia runtime associates the code generator with the non-generated method
@@ -2531,8 +2540,8 @@ function generated_method_defs(ctx, src, mtable, sparams, argl, body, rett)
                 # (TODO: More truncation. We certainly don't want to store the
                 #  source file either.)
                 sourceref(src)::K"Value"
-                [K"call" "svec"::K"core" mapsyntax(_expr_arg_sym, argl)...]
-                [K"call" "svec"::K"core" mapsyntax(_expr_arg_sym, sparams)...]]]
+                [K"call" "svec"::K"core" _expr_arg_syms(argl)...]
+                [K"call" "svec"::K"core" _expr_arg_syms(sparams)...]]]
             body[2]]
         method_def_expr(ctx, src, mtable, sparams, argl, nongen_body, rett)
     end
@@ -2811,22 +2820,24 @@ function keywords_method_def_expr(ctx, src, mtable, sparams, argl, body, rett)
     ]
 end
 
-_lower_destructuring_arg(stmts, ctx, ex) = @stm ex begin
-    [K"tuple" _...] -> let arg2 = newsym(ctx, ex, "destructured")
+# string mangling is necessary until generated functions know about scope layers
+# (hack, see _expr_arg_syms).
+_lower_destructuring_arg(stmts, ctx, i, ex) = @stm ex begin
+    [K"tuple" _...] -> let arg2 = newsym(ctx, ex, "destructured#" * string(i))
         push!(stmts, @ast(ctx, ex, [K"local"(meta=CompileHints(:is_destructured_arg, true))
             [K"=" ex arg2]]))
         arg2
     end
-    [K"::" x t] -> @ast ctx ex [K"::" _lower_destructuring_arg(stmts, ctx, x) t]
-    [K"kw" x t] -> @ast ctx ex [K"kw" _lower_destructuring_arg(stmts, ctx, x) t]
-    [K"..." x]  -> @ast ctx ex [K"..." _lower_destructuring_arg(stmts, ctx, x)]
+    [K"::" x t] -> @ast ctx ex [K"::" _lower_destructuring_arg(stmts, ctx, i, x) t]
+    [K"kw" x t] -> @ast ctx ex [K"kw" _lower_destructuring_arg(stmts, ctx, i, x) t]
+    [K"..." x]  -> @ast ctx ex [K"..." _lower_destructuring_arg(stmts, ctx, i, x)]
     _ -> ex
 end
 
 function lower_destructuring_args!(ctx, args)
     stmts = SyntaxList(ctx.graph)
     for (i, a) in enumerate(args)
-        args[i] = _lower_destructuring_arg(stmts, ctx, a)
+        args[i] = _lower_destructuring_arg(stmts, ctx, i, a)
     end
     # return `nothing` from the assignments (issue #26518)
     !isempty(stmts) && push!(stmts, @ast ctx stmts[1] (::K"nothing"))
