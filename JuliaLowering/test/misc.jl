@@ -631,26 +631,12 @@ end
             ccall((:ctest, lib), Complex{Int}, (Complex{Int},), 10+20im)
         end""")
 
-    # ---- BROKEN: ----
-    # A top-level local used as the *function name* of a global method is
-    # accepted by `static_eval_disallowed_binding` (top-level local, not in a
-    # closure) and interpolated to a bare Symbol, which then trips an *internal*
-    # "Found raw symbol" lowering error instead of the clean rejection flisp
-    # gives (and that the same-frame / closure name cases above give).
-    name_err = try
-        cc("""
-            begin
-                local nm = :strlen
-                g() = ccall(nm, Csize_t, (Cstring,), "asdfg")
-                g()
-            end""")
-        nothing
-    catch e
-        e
-    end
-    @test name_err !== nothing   # it is rejected ...
-    # ... but with an internal error; flip to `@test` once it rejects cleanly.
-    @test_broken !occursin("Found raw symbol", sprint(showerror, name_err))
+    @test_throws TypeError cc("""
+    begin
+        local nm = :strlen
+        g() = ccall(nm, Csize_t, (Cstring,), "asdfg")
+        g()
+    end""")
 end
 
 @testset "CodeInfo: has_image_globalref" begin

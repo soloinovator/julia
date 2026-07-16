@@ -93,6 +93,25 @@ end
 @test test_mod.f_global_method_capturing_local() == 2
 @test test_mod.f_global_method_capturing_local() == 3
 
+# quote interpolated AST
+@test JuliaLowering.include_string(test_mod, """
+let x = Symbol("foo"), xq = QuoteNode(x)
+    global function f_global_method_capturing_sym()
+        x, xq
+    end
+    f_global_method_capturing_sym()
+end
+""") == (:foo, QuoteNode(:foo))
+@test JuliaLowering.include_string(test_mod, """
+global dont_resolve = 1
+let x = GlobalRef(@__MODULE__, :dont_resolve), xq = QuoteNode(x)
+    global function f_global_method_capturing_gr()
+        x, xq
+    end
+    f_global_method_capturing_gr()
+end
+""") == (GlobalRef(test_mod, :dont_resolve), QuoteNode(GlobalRef(test_mod, :dont_resolve)))
+
 # Closure with multiple methods depending on local variables
 f_closure_local_var_types = JuliaLowering.include_string(test_mod, """
 let T=Int, S=Float64
