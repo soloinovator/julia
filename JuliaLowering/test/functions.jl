@@ -1641,6 +1641,13 @@ end
 end
 
 @testset "Consequences of accepting badly-parsed anonymous forms" begin
+    # kw
+    @test jl_eval(test_mod,
+                  Expr(:call,
+                       Expr(:function, Expr(:kw, :a, 1),
+                            Expr(:block, Expr(:tuple, :a))),
+                       )) == (1,)
+
     # empty block
     @test jl_eval(test_mod,
                   Expr(:call,
@@ -1650,7 +1657,7 @@ end
 
     # unwrapped or block-wrapped arg
     @testset for a1 in [:a, Expr(:(::), :a, :Int)],
-        a2 in [a1, Expr(:(=), :a, 0)],
+        a2 in [a1, Expr(:(=), :a, 0), Expr(:kw, :a, 0)],
         wrap_where in [identity, x->Expr(:where, x), x->Expr(:where, Expr(:where, x))]
 
         @test jl_eval(test_mod,

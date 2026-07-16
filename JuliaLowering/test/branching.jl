@@ -214,6 +214,14 @@ end
 """) === 3
 
 end
+
+@testset "elseif is valid outside of if" begin
+    @test jl_eval(test_mod, Expr(:elseif, true, 1)) == 1
+    @test jl_eval(test_mod, Expr(:elseif, false, 1)) == nothing
+    @test jl_eval(test_mod, Expr(:elseif, true, 1, 2)) == 1
+    @test jl_eval(test_mod, Expr(:elseif, false, 1, 2)) == 2
+end
+
 #-------------------------------------------------------------------------------
 # Block condition
 @test JuliaLowering.include_string(test_mod, """

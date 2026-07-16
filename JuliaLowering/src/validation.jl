@@ -149,16 +149,18 @@ vst1(vcx::Validation1Context, st::SyntaxTree)::ValidationResult = @stm st begin
         inner_vcx = vcx.toplevel ? with(vcx; inner_cond=true) : vcx
         @stm st begin
             [K"if" [K"generated"] t f] ->
-                vst1(inner_vcx, t) & vst1_else(inner_vcx, f)
+                vst1(inner_vcx, t) & vst1(inner_vcx, f)
             [K"if" [K"generated"] _...] ->
                 @fail(st, "if-generated requires both true and false cases")
             [K"if" cond t] ->
                 vst1(vcx, cond) & vst1(inner_vcx, t)
             [K"if" cond t f] ->
-                vst1(vcx, cond) & vst1(inner_vcx, t) & vst1_else(inner_vcx, f)
+                vst1(vcx, cond) & vst1(inner_vcx, t) & vst1(inner_vcx, f)
             _ -> @fail(st, "expected (if cond body) or (if cond body else)")
         end
     end
+    [K"elseif" cond t] -> vst1(vcx, cond) & vst1(vcx, t)
+    [K"elseif" cond t f] -> vst1(vcx, cond) & vst1(vcx, t) & vst1(vcx, f)
     [K"try" _...] -> vst1_try(vcx, st)
     [K"function" _...] -> vst1_function(vcx, st)
     [K"call" _...] -> vst1_call(vcx, st)
@@ -445,15 +447,6 @@ vst1_tuple(vcx, st) = @stm st begin
     _ -> @fail(st, "malformed tuple")
 end
 
-vst1_else(vcx, st) = @stm st begin
-    [K"elseif" cond t] -> vst1(vcx, cond) &
-        vst1(vcx, t)
-    [K"elseif" cond t f] -> vst1(vcx, cond) &
-        vst1(vcx, t) &
-        vst1_else(vcx, f)
-    _ -> vst1(vcx, st)
-end
-
 # TODO: disallow (has-unmatched-symbolic-goto? tryb)
 vst1_try(vcx, st) = @stm st begin
     [K"try" _] -> @fail(st, "try without catch or finally")
@@ -623,6 +616,7 @@ vst1_lam_lhs(vcx, st) = @stm st begin
     [K"block" x p] -> _calldecl_positionals(vcx, SyntaxList(x), true) &
         @stm p begin
             [K"=" kw v] -> vst1_param(vcx, kw) & vst1(vcx, v)
+            [K"kw" kw v] -> vst1_param(vcx, kw) & vst1(vcx, v)
             [K"..." kw] -> vst1_param_varkw(vcx, kw)
             _ -> vst1_param(vcx, p)
         end
@@ -1248,7 +1242,9 @@ vst2(vcx::Validation2Context, st::SyntaxTree) = @stm st begin
     [K"local" x] -> vst2_ident_lhs(vcx, x)
     [K"decl" x t] -> vst2_ident(vcx, x) & vst2(vcx, t)
     [K"if" cond t] -> vst2(vcx, cond) & vst2(vcx, t)
-    [K"if" cond t f] ->  vst2(vcx, cond) & vst2(vcx, t) & vst2_else(vcx, f)
+    [K"if" cond t f] -> vst2(vcx, cond) & vst2(vcx, t) & vst2(vcx, f)
+    [K"elseif" cond t] -> vst2(vcx, cond) & vst2(vcx, t)
+    [K"elseif" cond t f] -> vst2(vcx, cond) & vst2(vcx, t) & vst2(vcx, f)
     [K"&&" xs...] -> all(vst2, vcx, xs)
     [K"||" xs...] -> all(vst2, vcx, xs)
     [K"symbolicblock" [K"symboliclabel"] body] -> vst2(vcx, body)
@@ -1357,12 +1353,6 @@ vst2_lam(vcx, st) = @stm st begin
         vst2(vcx, body) &
         vst2(vcx, rett)
     _ -> @fail(st, "malformed lambda")
-end
-
-vst2_else(vcx, st) = @stm st begin
-    [K"elseif" cond t] -> vst2(vcx, cond) & vst2(vcx, t)
-    [K"elseif" cond t f] -> vst2(vcx, cond) & vst2(vcx, t) & vst2_else(vcx, f)
-    _ -> vst2(vcx, st)
 end
 
 vst2_typevar(vcx, st) = @stm st begin

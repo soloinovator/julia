@@ -57,10 +57,13 @@ function is_expr_value(st::SyntaxTree)
     return JuliaSyntax.is_literal(k) || k === K"Value"
 end
 
-# Most of the complexity here is LineNumberNode absorption logic: linenodes are
-# always considered provenance if unquoted, then removed in certain forms.  If
-# `src` is not an linenode, it is assumed to be a better provenance source, so
-# linenodes in `e` are not used for provenance (but still removed).
+# Adding more cases to this function is almost certainly wrong, since this
+# operates on arbitrary heads and arguments throughout macro expansion, not
+# well-formed syntax after expansion is done.  Most of the complexity here is
+# LineNumberNode absorption logic: linenodes are always considered provenance if
+# unquoted, then removed in certain forms.  If `src` is not an linenode, it is
+# assumed to be a better provenance source, so linenodes in `e` are not used for
+# provenance (but still removed).
 function _expr_to_est(graph::SyntaxGraph, @nospecialize(e), src::SourceAttrType)
     st = if e isa Symbol
         setattr!(newleaf(graph, src, K"Identifier"), :name_val, String(e))
