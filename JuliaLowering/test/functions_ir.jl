@@ -3,10 +3,12 @@
 function f
 end
 #---------------------
-1   (method TestMod.f)
+1   (call core.declare_global TestMod :f false)
 2   latestworld
-3   TestMod.f
-4   (return %₃)
+3   (method TestMod.f)
+4   latestworld
+5   TestMod.f
+6   (return %₅)
 
 ########################################
 # Functions with placeholder arg

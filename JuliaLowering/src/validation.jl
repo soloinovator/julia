@@ -1237,6 +1237,7 @@ vst2(vcx::Validation2Context, st::SyntaxTree) = @stm st begin
     [K"scope_block" xs...] -> all(vst2, vcx, xs)
     [K"=" l r] -> vst2_ident_lhs(vcx, l) & vst2(vcx, r)
     [K"assign_or_constdecl_if_global" l r] -> vst2_ident_lhs(vcx, l) & vst2(vcx, r)
+    [K"global_if_global" x] -> vst2_ident_lhs(vcx, x)
     [K"constdecl" l] -> vst2_ident_lhs(vcx, l)
     [K"constdecl" l r] -> vst2_ident_lhs(vcx, l) & vst2(vcx, r)
     [K"global" x] -> vst2_ident_lhs(vcx, x)

@@ -643,6 +643,10 @@ function _resolve_scopes(ctx, ex::SyntaxTree,
             kind(id) === K"Placeholder" ||
             (get_binding(ctx, id).kind !== :global) ? K"=" : K"constdecl"
         @ast ctx ex _resolve_scopes(ctx, [assignment_kind ex[1] ex[2]], scope)
+    elseif k === K"global_if_global"
+        out = _resolve_scopes(ctx, ex[1], scope)
+        get_binding(ctx, out).kind !== :global ? (@ast ctx ex (::K"TOMBSTONE")) :
+            @ast ctx ex [K"global" out]
     else
         mapchildren(e->_resolve_scopes(ctx, e, scope), ctx, ex)
     end

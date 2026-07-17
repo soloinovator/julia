@@ -4305,7 +4305,8 @@ function expand_forms_2(ctx::DesugaringContext, ex::SyntaxTree, docs=nothing)
         expand_forms_2(ctx, expand_generator(ctx, ex))
     elseif k == K"function"
         if numchildren(ex) == 1
-            return @ast ctx ex [K"block" [K"function_decl" ex[1]] ex[1]]
+            return @ast ctx ex [K"block"
+                [K"global_if_global" ex[1]] [K"function_decl" ex[1]] ex[1]]
         end
         sig, wheres = flatten_wheres(ex[1])
         name, args, rett = @stm sig begin
