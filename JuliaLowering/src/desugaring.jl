@@ -62,7 +62,7 @@ function is_effect_free(ex)
     # TODO: metas
     is_literal(k) || is_identifier_like(ex) || k == K"Symbol" ||
         k == K"inert" || k == K"syntaxinert" || k == K"top" ||
-        k == K"core" || k == K"Value"
+        k == K"core" || k == K"Value" || k == K"nothing"
     # flisp also includes `a.b` with simple `a`, but this seems like a bug
     # because this calls the user-defined getproperty?
 end
@@ -3438,7 +3438,8 @@ function _rewrite_ctor_new_calls(ctx, ex, global_struct_name, ctor_sparams,
         elseif n_type_nonsplat > length(struct_typevars)
             throw(LoweringError(ex[1], "too many type parameters specified in `new{...}`"))
         end
-        @ast ctx ex[1] [K"curly" global_struct_name new_type_params...]
+        isempty(new_type_params) ? global_struct_name :
+            @ast ctx ex[1] [K"curly" global_struct_name new_type_params...]
     elseif !isnothing(ctor_self)
         # new(...) in constructors
         ctor_self

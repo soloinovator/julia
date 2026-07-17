@@ -409,6 +409,16 @@ end
     @test fieldnames(test_mod.DefaultInnerCtors6) == (:field,)
 
     @test JL.include_string(test_mod, raw"""
+        struct DefaultInnerCtors7
+        field::Int
+        begin; end
+        begin; begin; end; end
+        end
+    """) === nothing
+    test_has_inner_ctor(test_mod.DefaultInnerCtors7)
+    @test fieldnames(test_mod.DefaultInnerCtors7) == (:field,)
+
+    @test JL.include_string(test_mod, raw"""
         struct NoDefaultInnerCtors1
         field::Int
         identity(1)
@@ -534,6 +544,18 @@ end
 # Wrong number of args checked by lowering
 @test_throws ArgumentError test_mod.S8((1,), ())
 @test_throws ArgumentError test_mod.S8((1,2,3), ())
+
+# empty-curly `new{}()`
+@test JuliaLowering.include_string(test_mod, """
+struct S_empty_new
+    x::Int
+    S_empty_new() = new{}(5)
+end
+""") === nothing
+let s = test_mod.S_empty_new()
+    @test s isa test_mod.S_empty_new
+    @test s.x === 5
+end
 
 # new() with splats and untyped fields
 @test JuliaLowering.include_string(test_mod, """
