@@ -2737,7 +2737,7 @@ function keywords_method_def_expr(ctx, src, mtable, sparams, argl, body, rett)
                 !any(val->contains_unquoted(e->kind(e) == K"=", val), kw_defaults)
         kw_temps = use_ssa_kw_temps ?
             mapsyntax(x->ssavar(ctx, x, x.name_val), kw_names) : kw_names
-        tempslot = newsym(ctx, kws, "kwtmp")
+        tempslot = newsym(ctx, kws, "#kwtmp#")
         keyword_only_spnames = mapindex(unused_typevars(pargl, sparams), 1)
 
         kw_assigns = SyntaxList(ctx.graph)
