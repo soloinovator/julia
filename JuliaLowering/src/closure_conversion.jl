@@ -428,8 +428,7 @@ function _convert_closures(ctx::ClosureConversionCtx, ex)
             @ast ctx ex [K"call"
                 "isdefinedglobal"::K"core"
                 ctx.mod::K"Value"
-                binfo.name::K"Symbol"
-                false::K"Bool"]
+                binfo.name::K"Symbol"]
         else
             ex
         end
